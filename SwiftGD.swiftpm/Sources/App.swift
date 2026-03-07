@@ -720,14 +720,16 @@ class BrickBreakerScene: SKScene {
 
     func fireLaserColumn(_ col: Int) {
         let colX = BRICK_OFFSET_X + CGFloat(col) * (BRICK_W + BRICK_GAP) + BRICK_W/2
-        // Destroy all bricks in column
-        let targets = brickLive.filter { $0.value.col == col }.map { $0.key }
-        for node in targets {
-            guard let live = brickLive[node] else { continue }
+        // Destroy all bricks in column (with particles and powerup drops, matching HTML)
+        let targets = brickLive.filter { $0.value.col == col }
+        for (node, live) in targets {
             let pts = BRICK_COLORS[live.colorIdx % BRICK_COLORS.count].pts
+            let center = node.position
             node.removeFromParent()
             brickLive.removeValue(forKey: node)
             model?.score += pts * (model?.level ?? 1)
+            spawnParticles(at: center, colorIdx: live.colorIdx)
+            tryDropPowerup(at: center, col: col)
         }
         if !targets.isEmpty && allBricksCleared { onLevelClear?() }
 
@@ -936,7 +938,7 @@ struct ContentView: View {
     private var overlayConfig: OverlayConfig? {
         switch model.state {
         case .idle:
-            return OverlayConfig(title: "BRICK BREAKER",
+            return OverlayConfig(title: "READY?",
                                  subtitle: "DRAG TO MOVE  ·  TAP TO LAUNCH",
                                  button: "START GAME", color: .neonCyan) { startGame() }
         case .dead:
@@ -990,7 +992,23 @@ struct ContentView: View {
                 }
                 .frame(width: GW, height: GH)
 
-                Spacer(minLength: 4)
+                // Power-up legend
+                HStack(spacing: 10) {
+                    puLegendItem(color: Color(red:1, green:0.27, blue:0), label: "ZAP")
+                    puLegendItem(color: Color(red:0, green:0.40, blue:1), label: "3-BALL")
+                    puLegendItem(color: Color(red:0.67, green:0, blue:1), label: "WIDE")
+                    puLegendItem(color: Color(red:0, green:1, blue:0.53), label: "SPEED")
+                }
+                .padding(.top, 5)
+                .padding(.bottom, 4)
+
+                Text("DRAG TO MOVE PADDLE  |  TAP TO LAUNCH")
+                    .font(.system(size: 8, weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.16))
+                    .kerning(1)
+                    .padding(.bottom, 4)
+
+                Spacer(minLength: 0)
             }
             .frame(maxWidth: GW)
         }
@@ -1005,6 +1023,15 @@ struct ContentView: View {
             }
             scene.onLoseLife    = { loseLife() }
             scene.onLevelClear  = { levelClear() }
+        }
+    }
+
+    private func puLegendItem(color: Color, label: String) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(label)
+                .font(.system(size: 8, weight: .regular, design: .monospaced))
+                .foregroundColor(.white.opacity(0.28))
         }
     }
 
