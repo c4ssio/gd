@@ -1,10 +1,10 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 5.5
 import PackageDescription
 
 let package = Package(
     name: "SwiftGD",
     platforms: [
-        .iOS("16.0")
+        .iOS("15.2")
     ],
     products: [
         .iOSApplication(
@@ -14,17 +14,9 @@ let package = Package(
             displayVersion: "1.0",
             bundleVersion: "1",
             appIcon: .placeholder(icon: .star),
-            accentColor: .presetColor(.yellow),
-            supportedDeviceFamilies: [
-                .pad,
-                .phone
-            ],
-            supportedInterfaceOrientations: [
-                .portrait,
-                .landscapeRight,
-                .landscapeLeft,
-                .portraitUpsideDown(.when(deviceFamilies: [.pad]))
-            ]
+            accentColor: .presetColor(.blue),
+            supportedDeviceFamilies: [.pad, .phone],
+            supportedInterfaceOrientations: [.portrait]
         )
     ],
     targets: [
