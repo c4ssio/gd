@@ -14,7 +14,7 @@ private let puH:       CGFloat = 18
 private let puSpeed:   CGFloat = 1.8
 
 // MARK: - Brick color palette
-private struct BrickStyle { let fill: Color; let pts: Int }
+struct BrickStyle { let fill: Color; let pts: Int }
 private let palette: [BrickStyle] = [
     BrickStyle(fill: Color(red:1,   green:0,    blue:0.5),  pts:50),
     BrickStyle(fill: Color(red:1,   green:0.4,  blue:0),    pts:40),
@@ -476,7 +476,7 @@ struct ContentView: View {
                                                width: cyanRadius*2, height: cyanRadius*2)),
                         with: .radialGradient(
                             Gradient(colors: [Color(red:0,green:0.96,blue:1,opacity:0.06), .clear]),
-                            center: UnitPoint(x: 0.5, y: 0.5),
+                            center: cyanCenter,
                             startRadius: 0, endRadius: cyanRadius)
                     )
                     // Pink glow bottom-right (80%, 80%)
@@ -487,7 +487,7 @@ struct ContentView: View {
                                                width: pinkRadius*2, height: pinkRadius*2)),
                         with: .radialGradient(
                             Gradient(colors: [Color(red:1,green:0,blue:0.5,opacity:0.06), .clear]),
-                            center: UnitPoint(x: 0.5, y: 0.5),
+                            center: pinkCenter,
                             startRadius: 0, endRadius: pinkRadius)
                     )
                 }
@@ -730,11 +730,12 @@ struct ContentView: View {
         // Level name watermark
         if game.phase == .playing {
             let names = ["","CLASSIC","PYRAMID","DIAMOND","CHECKERBOARD","FORTRESS","HERRINGBONE","CROSS","GAUNTLET"]
-            ctx.opacity = 0.18
-            ctx.draw(Text(names[min(game.level,8)])
-                .font(.system(size:9,design:.monospaced)).foregroundColor(.white),
-                     at:CGPoint(x:size.width-40,y:size.height-10))
-            ctx.opacity = 1
+            ctx.drawLayer { c in
+                c.opacity = 0.18
+                c.draw(Text(names[min(game.level,8)])
+                    .font(.system(size:9,design:.monospaced)).foregroundColor(.white),
+                       at:CGPoint(x:size.width-40,y:size.height-10))
+            }
         }
     }
 
