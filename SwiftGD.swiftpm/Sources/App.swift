@@ -166,6 +166,14 @@ enum PowerupType: CaseIterable {
     }
 }
 
+// ─── Particles ────────────────────────────────────────────────────────────────
+struct ParticleState {
+    var x, y, vx, vy: CGFloat
+    var life: CGFloat
+    var node: SKShapeNode
+}
+
+// ─── Power-up state ──────────────────────────────────────────────────────────
 struct PowerupState {
     var x, y: CGFloat   // center in scene coords
     var type:  PowerupType
@@ -265,6 +273,9 @@ class BrickBreakerScene: SKScene {
     // ball state
     private(set) var balls: [BallState] = []
     var speedActive = false
+
+    // particles
+    private var particles: [ParticleState] = []
 
     // power-up state
     private var powerups: [PowerupState] = []
@@ -377,7 +388,8 @@ class BrickBreakerScene: SKScene {
 
     // ── Game loop ────────────────────────────────────────────────────────────
     override func update(_ currentTime: TimeInterval) {
-        guard model?.state == .playing else { lastUpdateTime = 0; return }
+        let st = model?.state
+        guard st == .playing || st == .levelClear else { lastUpdateTime = 0; return }
         let dt: CGFloat
         if lastUpdateTime == 0 {
             dt = 1
@@ -385,9 +397,12 @@ class BrickBreakerScene: SKScene {
             dt = CGFloat(min((currentTime - lastUpdateTime) / (1.0/60.0), 3.0))
         }
         lastUpdateTime = currentTime
-        updateTimers(dt: dt)
-        updateBalls(dt: dt)
-        updatePowerups(dt: dt)
+        if st == .playing {
+            updateTimers(dt: dt)
+            updateBalls(dt: dt)
+            updatePowerups(dt: dt)
+        }
+        updateParticles(dt: dt)  // tick particles during levelClear too
     }
 
     private func updateBalls(dt: CGFloat) {
@@ -465,12 +480,58 @@ class BrickBreakerScene: SKScene {
             if destroyed {
                 let lvl = model?.level ?? 1
                 model?.score += pts * lvl
-                tryDropPowerup(at: CGPoint(x: brickCenterX, y: brickCenterY), col: col)
+                let center = CGPoint(x: brickCenterX, y: brickCenterY)
+                spawnParticles(at: center, colorIdx: colorIdx)
+                tryDropPowerup(at: center, col: col)
                 if allBricksCleared { onLevelClear?() }
             }
             balls[ballIdx] = ball
             break  // one brick per ball per frame
         }
+    }
+
+    // ── Particles ────────────────────────────────────────────────────────────
+    func spawnParticles(at center: CGPoint, colorIdx: Int) {
+        let color = BRICK_COLORS[colorIdx % BRICK_COLORS.count].fill
+        for _ in 0..<12 {
+            let angle = CGFloat.random(in: 0...(2 * .pi))
+            let speed = CGFloat.random(in: 1.5...5.0)
+            let size  = CGFloat.random(in: 2...5)
+            let node  = SKShapeNode(circleOfRadius: size)
+            node.fillColor   = color
+            node.strokeColor = .clear
+            node.position    = center
+            node.zPosition   = 3
+            addChild(node)
+            particles.append(ParticleState(
+                x: center.x, y: center.y,
+                vx: cos(angle) * speed, vy: sin(angle) * speed,
+                life: 1.0, node: node
+            ))
+        }
+    }
+
+    // Called every frame — also ticks during levelClear so sparks linger
+    func updateParticles(dt: CGFloat) {
+        var i = particles.count - 1
+        while i >= 0 {
+            particles[i].x    += particles[i].vx * dt
+            particles[i].y    += particles[i].vy * dt
+            particles[i].vy   -= 0.1 * dt            // gravity
+            particles[i].life -= 0.04 * dt
+            particles[i].node.position = CGPoint(x: particles[i].x, y: particles[i].y)
+            particles[i].node.alpha    = max(0, particles[i].life)
+            if particles[i].life <= 0 {
+                particles[i].node.removeFromParent()
+                particles.remove(at: i)
+            }
+            i -= 1
+        }
+    }
+
+    func clearParticles() {
+        particles.forEach { $0.node.removeFromParent() }
+        particles.removeAll()
     }
 
     // ── Power-ups ────────────────────────────────────────────────────────────
