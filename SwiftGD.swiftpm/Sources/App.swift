@@ -1,52 +1,227 @@
 import SwiftUI
 import SpriteKit
 
-// ─── Colours ────────────────────────────────────────────────────────────────
+// ─── Cross-platform colours (SKColor = UIColor on iOS, NSColor on macOS) ────
+extension SKColor {
+    static let bgCanvas = SKColor(red: 0.03, green: 0.06, blue: 0.09, alpha: 1)
+    static let gridLine = SKColor(red: 0, green: 0.96, blue: 1, alpha: 0.04)
+}
 extension Color {
     static let bgDark     = Color(red: 0.03, green: 0.06, blue: 0.08)
     static let neonCyan   = Color(red: 0,    green: 0.96, blue: 1)
     static let neonPink   = Color(red: 1,    green: 0,    blue: 0.50)
     static let neonYellow = Color(red: 1,    green: 0.90, blue: 0)
 }
-extension UIColor {
-    static let bgCanvas = UIColor(red: 0.03, green: 0.06, blue: 0.09, alpha: 1)
-    static let gridLine = UIColor(red: 0, green: 0.96, blue: 1, alpha: 0.04)
-}
 
 // ─── Game constants ──────────────────────────────────────────────────────────
-let GW: CGFloat = 480   // game canvas width
-let GH: CGFloat = 520   // game canvas height
+let GW: CGFloat = 480
+let GH: CGFloat = 520
+
+let BRICK_COLS  = 9
+let BRICK_W: CGFloat  = 44
+let BRICK_H: CGFloat  = 16
+let BRICK_GAP: CGFloat = 4
+// Left offset so the 9-column grid is centred in GW
+let BRICK_OFFSET_X: CGFloat = (GW - CGFloat(BRICK_COLS) * (BRICK_W + BRICK_GAP) + BRICK_GAP) / 2
+// Top offset in HTML coords (44 px from top of canvas)
+let BRICK_OFFSET_Y_HTML: CGFloat = 44
+
+// ─── Brick colour table ──────────────────────────────────────────────────────
+struct BrickColor {
+    let fill: SKColor
+    let pts:  Int
+}
+
+let BRICK_COLORS: [BrickColor] = [
+    BrickColor(fill: SKColor(red:1,    green:0,    blue:0.50, alpha:1), pts:50), // 0 pink
+    BrickColor(fill: SKColor(red:1,    green:0.40, blue:0,    alpha:1), pts:40), // 1 orange
+    BrickColor(fill: SKColor(red:1,    green:0.90, blue:0,    alpha:1), pts:30), // 2 yellow
+    BrickColor(fill: SKColor(red:0,    green:1,    blue:0.53, alpha:1), pts:20), // 3 green
+    BrickColor(fill: SKColor(red:0,    green:0.96, blue:1,    alpha:1), pts:10), // 4 cyan
+    BrickColor(fill: SKColor(red:0.73, green:0.27, blue:1,    alpha:1), pts:35), // 5 purple
+    BrickColor(fill: SKColor(red:1,    green:0.53, blue:0.67, alpha:1), pts:25), // 6 light-pink
+]
+
+// ─── Brick definition (from level pattern) ───────────────────────────────────
+struct BrickDef {
+    let row: Int
+    let col: Int
+    let hp:  Int
+    let colorIdx: Int
+}
+
+// ─── Level patterns (8 levels, same logic as HTML) ───────────────────────────
+func levelPattern(_ lvl: Int) -> [BrickDef] {
+    var out: [BrickDef] = []
+    func add(_ r: Int, _ c: Int, _ hp: Int, _ ci: Int) {
+        guard c >= 0 && c < BRICK_COLS else { return }
+        out.append(BrickDef(row: r, col: c, hp: hp, colorIdx: ci))
+    }
+
+    switch lvl {
+    case 1: // CLASSIC — 5 full rows
+        for r in 0..<5 { for c in 0..<BRICK_COLS { add(r, c, r < 2 ? 2 : 1, r) } }
+
+    case 2: // PYRAMID
+        for r in 0..<5 {
+            let count = (r + 1) * 2 - 1
+            let start = (BRICK_COLS - count) / 2
+            for c in start..<(start + count) { add(r, c, r == 0 ? 2 : 1, r) }
+        }
+
+    case 3: // DIAMOND
+        for r in 0..<7 {
+            let half = r <= 3 ? r : 6 - r
+            for c in (4 - half)...(4 + half) {
+                let edge = (c == 4 - half || c == 4 + half || r == 0 || r == 6)
+                add(r, c, edge ? 2 : 1, edge ? 0 : 3)
+            }
+        }
+
+    case 4: // CHECKERBOARD
+        for r in 0..<6 { for c in 0..<BRICK_COLS {
+            if (r + c) % 2 == 0 { add(r, c, r < 2 ? 2 : 1, r % BRICK_COLORS.count) }
+        } }
+
+    case 5: // FORTRESS
+        for r in 0..<6 { for c in 0..<BRICK_COLS {
+            let isGate = (r == 5 && (c == 3 || c == 4 || c == 5))
+            if (r == 0 || r == 5 || c == 0 || c == BRICK_COLS-1) && !isGate {
+                add(r, c, 2, r == 0 ? 0 : 1)
+            }
+        } }
+        add(2, 4, 3, 5); add(3, 4, 3, 5)
+
+    case 6: // HERRINGBONE
+        for r in 0..<6 {
+            let offset = r % 2 == 0 ? 0 : 1
+            var c = 0
+            while c < BRICK_COLS - offset { add(r, c + offset, 2, r % BRICK_COLORS.count); c += 2 }
+        }
+
+    case 7: // CROSS
+        for r in 0..<7 { for c in 0..<BRICK_COLS {
+            let v = c == 4, h = r == 3
+            if v || h { add(r, c, (v && h) ? 3 : 2, (v && h) ? 5 : (v ? 0 : 2)) }
+        } }
+
+    default: // GAUNTLET (lvl 8)
+        for r in 0..<7 { for c in 0..<BRICK_COLS { add(r, c, r < 4 ? 2 : 1, r % BRICK_COLORS.count) } }
+    }
+    return out
+}
+
+// Converts HTML-style top-left row/col to SpriteKit scene Y (bottom-left origin)
+func brickSceneY(row: Int) -> CGFloat {
+    let htmlY = BRICK_OFFSET_Y_HTML + CGFloat(row) * (BRICK_H + BRICK_GAP)
+    return GH - htmlY - BRICK_H
+}
+
+// ─── Shared game model ───────────────────────────────────────────────────────
+enum GameState { case idle, playing, levelClear, dead, win }
+
+class GameModel: ObservableObject {
+    @Published var score: Int      = 0
+    @Published var level: Int      = 1
+    @Published var lives: Int      = 3
+    @Published var state: GameState = .idle
+}
+
+// ─── Live brick info stored per node ─────────────────────────────────────────
+struct BrickLive {
+    var hp:       Int
+    var colorIdx: Int
+    var row:      Int
+    var col:      Int
+}
 
 // ─── Scene ───────────────────────────────────────────────────────────────────
 class BrickBreakerScene: SKScene {
+    weak var model: GameModel?
+
+    // brick nodes; name = "b_row_col"
+    private(set) var brickLive: [SKNode: BrickLive] = [:]
 
     override func didMove(to view: SKView) {
         backgroundColor = .bgCanvas
         drawGrid()
     }
 
-    // Subtle cyan grid — matches HTML's rgba(0,245,255,0.04) lines every 30px
+    // ── Grid ────────────────────────────────────────────────────────────────
     private func drawGrid() {
         let step: CGFloat = 30
         var x: CGFloat = 0
         while x <= GW {
-            let line = SKShapeNode(rect: CGRect(x: x, y: 0, width: 1, height: GH))
-            line.fillColor = .gridLine
-            line.strokeColor = .clear
-            line.zPosition = 0
-            addChild(line)
-            x += step
+            let l = SKShapeNode(rect: CGRect(x: x, y: 0, width: 1, height: GH))
+            l.fillColor = .gridLine; l.strokeColor = .clear; l.zPosition = 0; addChild(l); x += step
         }
         var y: CGFloat = 0
         while y <= GH {
-            let line = SKShapeNode(rect: CGRect(x: 0, y: y, width: GW, height: 1))
-            line.fillColor = .gridLine
-            line.strokeColor = .clear
-            line.zPosition = 0
-            addChild(line)
-            y += step
+            let l = SKShapeNode(rect: CGRect(x: 0, y: y, width: GW, height: 1))
+            l.fillColor = .gridLine; l.strokeColor = .clear; l.zPosition = 0; addChild(l); y += step
         }
     }
+
+    // ── Build bricks ─────────────────────────────────────────────────────────
+    func buildBricks() {
+        guard let lvl = model?.level else { return }
+        // Remove existing bricks
+        brickLive.keys.forEach { $0.removeFromParent() }
+        brickLive.removeAll()
+
+        for def in levelPattern(lvl) {
+            let color = BRICK_COLORS[def.colorIdx % BRICK_COLORS.count]
+            let x = BRICK_OFFSET_X + CGFloat(def.col) * (BRICK_W + BRICK_GAP)
+            let y = brickSceneY(row: def.row)
+
+            // Brick body (rect centred at node position)
+            let node = SKShapeNode(
+                rect: CGRect(x: -BRICK_W/2, y: -BRICK_H/2, width: BRICK_W, height: BRICK_H),
+                cornerRadius: 2
+            )
+            node.position   = CGPoint(x: x + BRICK_W/2, y: y + BRICK_H/2)
+            node.fillColor  = def.hp < 2 ? color.fill : color.fill.withAlphaComponent(0.7)
+            node.strokeColor = color.fill.withAlphaComponent(0.35)
+            node.lineWidth  = 1
+            node.zPosition  = 1
+            node.name       = "brick"
+            addChild(node)
+
+            // White dot = HP indicator (only for 2+ HP bricks)
+            if def.hp >= 2 {
+                let dot = SKShapeNode(circleOfRadius: 2.5)
+                dot.fillColor   = SKColor.white.withAlphaComponent(0.6)
+                dot.strokeColor = .clear
+                dot.position    = CGPoint(x: BRICK_W/2 - 6, y: 0)
+                dot.zPosition   = 2
+                dot.name        = "hpDot"
+                node.addChild(dot)
+            }
+
+            brickLive[node] = BrickLive(hp: def.hp, colorIdx: def.colorIdx, row: def.row, col: def.col)
+        }
+    }
+
+    // Damage a brick; returns true if destroyed
+    func damageBrick(_ node: SKNode, by amount: Int = 1) -> Bool {
+        guard var live = brickLive[node] else { return false }
+        live.hp -= amount
+        brickLive[node] = live
+        if live.hp <= 0 {
+            node.removeFromParent()
+            brickLive.removeValue(forKey: node)
+            return true
+        }
+        // Update appearance for reduced-HP brick (remove dot, full opacity)
+        if let shape = node as? SKShapeNode {
+            let color = BRICK_COLORS[live.colorIdx % BRICK_COLORS.count]
+            shape.fillColor = color.fill
+            node.childNode(withName: "hpDot")?.removeFromParent()
+        }
+        return false
+    }
+
+    var allBricksCleared: Bool { brickLive.isEmpty }
 }
 
 // ─── HUD bar ─────────────────────────────────────────────────────────────────
@@ -78,32 +253,28 @@ struct HUDView: View {
     }
 }
 
-// ─── Start / Game-over overlay ────────────────────────────────────────────────
+// ─── Overlay ─────────────────────────────────────────────────────────────────
 struct OverlayView: View {
-    let title: String
-    let subtitle: String
+    let title:       String
+    let subtitle:    String
     let buttonLabel: String
-    let titleColor: Color
-    let onTap: () -> Void
+    let titleColor:  Color
+    let onTap:       () -> Void
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.88)
-                .ignoresSafeArea()
-
+            Color.black.opacity(0.88).ignoresSafeArea()
             VStack(spacing: 18) {
                 Text(title)
                     .font(.system(size: 24, weight: .black, design: .rounded))
                     .foregroundColor(titleColor)
                     .shadow(color: titleColor.opacity(0.8), radius: 16)
                     .multilineTextAlignment(.center)
-
                 Text(subtitle)
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
                     .foregroundColor(.white.opacity(0.4))
                     .kerning(1.5)
                     .multilineTextAlignment(.center)
-
                 Button(action: onTap) {
                     Text(buttonLabel)
                         .font(.system(size: 11, weight: .bold, design: .rounded))
@@ -111,10 +282,7 @@ struct OverlayView: View {
                         .foregroundColor(.neonCyan)
                         .padding(.horizontal, 28)
                         .padding(.vertical, 10)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .stroke(Color.neonCyan, lineWidth: 1)
-                        )
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.neonCyan, lineWidth: 1))
                         .shadow(color: .neonCyan.opacity(0.4), radius: 10)
                 }
             }
@@ -123,25 +291,19 @@ struct OverlayView: View {
     }
 }
 
-// ─── Root content view ────────────────────────────────────────────────────────
+// ─── Root view ────────────────────────────────────────────────────────────────
 struct ContentView: View {
-    @State private var score = 0
-    @State private var level = 1
-    @State private var lives = 3
-    @State private var gameState: GameState = .idle
+    @StateObject private var model = GameModel()
 
-    enum GameState { case idle, playing }
-
-    private var scene: BrickBreakerScene {
+    @State private var scene: BrickBreakerScene = {
         let s = BrickBreakerScene(size: CGSize(width: GW, height: GH))
         s.scaleMode = .aspectFit
         return s
-    }
+    }()
 
     var body: some View {
         ZStack {
             Color.bgDark.ignoresSafeArea()
-
             VStack(spacing: 0) {
                 Text("BRICK BREAKER")
                     .font(.system(size: 22, weight: .black, design: .rounded))
@@ -151,28 +313,23 @@ struct ContentView: View {
                     .padding(.top, 10)
                     .padding(.bottom, 6)
 
-                HUDView(score: score, level: level, lives: lives)
+                HUDView(score: model.score, level: model.level, lives: model.lives)
                     .padding(.bottom, 6)
 
                 ZStack {
                     SpriteView(scene: scene)
                         .frame(width: GW, height: GH)
                         .clipShape(RoundedRectangle(cornerRadius: 4))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .stroke(Color.neonCyan.opacity(0.2), lineWidth: 1)
-                        )
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.neonCyan.opacity(0.2), lineWidth: 1))
                         .shadow(color: .neonCyan.opacity(0.1), radius: 20)
 
-                    if gameState == .idle {
+                    if model.state == .idle {
                         OverlayView(
                             title: "BRICK BREAKER",
                             subtitle: "DRAG TO MOVE  ·  TAP TO LAUNCH",
                             buttonLabel: "START GAME",
                             titleColor: .neonCyan
-                        ) {
-                            gameState = .playing
-                        }
+                        ) { startGame() }
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                     }
                 }
@@ -182,10 +339,22 @@ struct ContentView: View {
             }
             .frame(maxWidth: GW)
         }
+        .onAppear {
+            scene.model = model
+            scene.buildBricks()   // preview bricks before game starts
+        }
+    }
+
+    private func startGame() {
+        model.score = 0
+        model.lives = 3
+        model.level = 1
+        model.state = .playing
+        scene.buildBricks()
     }
 }
 
-// ─── App entry point ──────────────────────────────────────────────────────────
+// ─── App ─────────────────────────────────────────────────────────────────────
 @main
 struct SwiftGDApp: App {
     var body: some Scene {
