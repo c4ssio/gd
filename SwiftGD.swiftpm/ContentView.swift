@@ -567,15 +567,20 @@ struct ContentView: View {
                        with:.color(Color(red:0,green:1,blue:0.53,opacity:0.18)), lineWidth:8)
         }
 
-        // Bricks
+        // Bricks — flat fill + linear gradient sheen (white 30% → black 20%)
         for b in game.bricks where b.alive {
             let rect = game.brickRect(b)
             ctx.drawLayer { c in
                 c.opacity = b.hp < 2 ? 1.0 : 0.75
                 c.addFilter(.shadow(color: b.style.fill.opacity(0.7), radius: 8))
+                // Base color
                 c.fill(Path(roundedRect:rect,cornerRadius:3), with:.color(b.style.fill))
-                c.fill(Path(CGRect(x:rect.minX,y:rect.minY,width:rect.width,height:rect.height*0.45)),
-                       with:.color(.white.opacity(0.18)))
+                // Top-to-bottom gradient sheen overlay matching HTML linear gradient
+                c.fill(Path(roundedRect:rect,cornerRadius:3),
+                       with:.linearGradient(
+                           Gradient(colors:[.white.opacity(0.30), .black.opacity(0.20)]),
+                           startPoint: CGPoint(x:rect.midX, y:rect.minY),
+                           endPoint:   CGPoint(x:rect.midX, y:rect.maxY)))
                 if b.hp >= 2 {
                     let d = Path(ellipseIn: CGRect(x:rect.maxX-8,y:rect.midY-2.5,width:5,height:5))
                     c.fill(d, with:.color(.white.opacity(0.7)))
@@ -594,46 +599,103 @@ struct ContentView: View {
             }
         }
 
-        // Particles
+        // Particles — with glow shadow matching HTML shadowBlur=8
         for p in game.particles {
             let r = p.size*p.life
-            ctx.opacity = Double(p.life)
-            ctx.fill(Path(ellipseIn:CGRect(x:p.pos.x-r,y:p.pos.y-r,width:r*2,height:r*2)),
-                     with:.color(p.color))
+            ctx.drawLayer { c in
+                c.opacity = Double(p.life)
+                c.addFilter(.shadow(color: p.color.opacity(Double(p.life)), radius: 8))
+                c.fill(Path(ellipseIn:CGRect(x:p.pos.x-r,y:p.pos.y-r,width:r*2,height:r*2)),
+                       with:.color(p.color))
+            }
         }
-        ctx.opacity = 1
 
         // Power-ups
         for pu in game.powerups {
             let rect = CGRect(x:pu.pos.x, y:pu.pos.y, width:puW, height:puH)
             ctx.drawLayer { c in
-                c.addFilter(.shadow(color:pu.kind.color, radius:10))
-                c.fill(Path(roundedRect:rect,cornerRadius:5), with:.color(pu.kind.color))
-                c.fill(Path(roundedRect:CGRect(x:rect.minX,y:rect.minY,
-                                               width:rect.width,height:rect.height*0.45),
-                            cornerRadius:5), with:.color(.white.opacity(0.25)))
-                c.draw(Text(pu.kind.label)
-                    .font(.system(size:9,weight:.bold)).foregroundColor(.white),
-                       at:CGPoint(x:rect.midX,y:rect.midY))
+                c.addFilter(.shadow(color:pu.kind.color, radius:14))
+                if pu.kind == .triball {
+                    // Triball: blue platform + mini yellow ball on top (matching HTML drawPowerup)
+                    let platH: CGFloat = 7
+                    let platRect = CGRect(x:rect.minX, y:rect.maxY-platH, width:rect.width, height:platH)
+                    c.fill(Path(roundedRect:platRect,cornerRadius:3),
+                           with:.color(Color(red:0,green:0.33,blue:0.8)))
+                    // Gradient sheen on platform
+                    c.fill(Path(roundedRect:platRect,cornerRadius:3),
+                           with:.linearGradient(
+                               Gradient(colors:[.white.opacity(0.35),.black.opacity(0.20)]),
+                               startPoint:CGPoint(x:platRect.midX,y:platRect.minY),
+                               endPoint:  CGPoint(x:platRect.midX,y:platRect.maxY)))
+                    // Mini ball (same radius as game ball) sitting on top of platform
+                    let bx = rect.midX, by = rect.maxY - platH - ballR
+                    let bBr = CGRect(x:bx-ballR,y:by-ballR,width:ballR*2,height:ballR*2)
+                    // Concentric ellipses: orange → yellow → white highlight (radial gradient approx)
+                    c.fill(Path(ellipseIn:bBr), with:.color(Color(red:1,green:0.6,blue:0)))
+                    let mR = ballR*0.78
+                    c.fill(Path(ellipseIn:CGRect(x:bx-mR,y:by-mR,width:mR*2,height:mR*2)),
+                           with:.color(Color(red:1,green:0.9,blue:0)))
+                    let hR = ballR*0.35
+                    let hOff = ballR*0.25
+                    c.fill(Path(ellipseIn:CGRect(x:bx-hOff-hR,y:by-hOff-hR,width:hR*2,height:hR*2)),
+                           with:.color(Color(red:1,green:0.98,blue:0.77)))
+                } else {
+                    // Standard power-up: colored rect + gradient sheen + label
+                    c.fill(Path(roundedRect:rect,cornerRadius:5), with:.color(pu.kind.color))
+                    c.fill(Path(roundedRect:rect,cornerRadius:5),
+                           with:.linearGradient(
+                               Gradient(colors:[.white.opacity(0.35),.black.opacity(0.20)]),
+                               startPoint:CGPoint(x:rect.midX,y:rect.minY),
+                               endPoint:  CGPoint(x:rect.midX,y:rect.maxY)))
+                    c.draw(Text(pu.kind.label)
+                        .font(.system(size:9,weight:.bold)).foregroundColor(.white),
+                           at:CGPoint(x:rect.midX,y:rect.midY))
+                }
             }
         }
 
-        // Paddle
-        let pc: Color = game.wideTimer>0  ? Color(red:0.8,green:0.27,blue:1) :
-                        game.speedTimer>0 ? Color(red:0,green:1,blue:0.53) : .cyan
+        // Paddle — linear gradient top→bottom matching HTML pg gradient
+        let pTop: Color  = game.wideTimer>0  ? Color(red:0.8, green:0.27, blue:1) :
+                           game.speedTimer>0 ? Color(red:0,   green:1,    blue:0.53) :
+                                               Color(red:0,   green:0.96, blue:1)
+        let pBot: Color  = game.wideTimer>0  ? Color(red:0.4, green:0,    blue:0.6) :
+                           game.speedTimer>0 ? Color(red:0,   green:0.53, blue:0.27) :
+                                               Color(red:0,   green:0.53, blue:0.67)
         let pr = CGRect(x:game.paddleX-game.paddleW/2, y:game.paddleY-paddleH/2,
                         width:game.paddleW, height:paddleH)
         ctx.drawLayer { c in
-            c.addFilter(.shadow(color:pc, radius:14))
-            c.fill(Path(roundedRect:pr,cornerRadius:paddleH/2), with:.color(pc))
+            c.addFilter(.shadow(color:pTop, radius:18))
+            c.fill(Path(roundedRect:pr,cornerRadius:paddleH/2),
+                   with:.linearGradient(
+                       Gradient(colors:[pTop, pBot]),
+                       startPoint: CGPoint(x:pr.midX, y:pr.minY),
+                       endPoint:   CGPoint(x:pr.midX, y:pr.maxY)))
         }
 
-        // Balls
+        // Balls — concentric ellipses approximating HTML radial gradient
         for b in game.balls {
-            let br = CGRect(x:b.pos.x-ballR,y:b.pos.y-ballR,width:ballR*2,height:ballR*2)
+            let bx = b.pos.x, by = b.pos.y
+            let br = CGRect(x:bx-ballR, y:by-ballR, width:ballR*2, height:ballR*2)
             ctx.drawLayer { c in
-                c.addFilter(.shadow(color:b.color.opacity(0.9), radius:16))
-                c.fill(Path(ellipseIn:br), with:.color(b.color))
+                if b.primary {
+                    // Yellow primary: #ff9900 → #ffe600 → white highlight (like HTML radial gradient)
+                    c.addFilter(.shadow(color: Color(red:1,green:0.9,blue:0,opacity:0.9), radius:20))
+                    c.fill(Path(ellipseIn:br), with:.color(Color(red:1,green:0.6,blue:0)))
+                    let mR = ballR*0.78
+                    c.fill(Path(ellipseIn:CGRect(x:bx-mR,y:by-mR,width:mR*2,height:mR*2)),
+                           with:.color(Color(red:1,green:0.9,blue:0)))
+                } else {
+                    // Colored extras: extraColor → white highlight
+                    c.addFilter(.shadow(color:b.color.opacity(0.9), radius:18))
+                    c.fill(Path(ellipseIn:br), with:.color(b.color.opacity(0.53)))
+                    let mR = ballR*0.78
+                    c.fill(Path(ellipseIn:CGRect(x:bx-mR,y:by-mR,width:mR*2,height:mR*2)),
+                           with:.color(b.color))
+                }
+                // White highlight offset top-left for both ball types
+                let hR = ballR*0.35, hOff = ballR*0.25
+                c.fill(Path(ellipseIn:CGRect(x:bx-hOff-hR,y:by-hOff-hR,width:hR*2,height:hR*2)),
+                       with:.color(Color(red:1,green:0.98,blue:0.77)))
             }
         }
 
