@@ -440,36 +440,246 @@ class GDEngine: ObservableObject {
         }
         particles.removeAll { $0.life <= 0 }
     }
+
+    // MARK: - Editor
+
+    var editorOpen        = false
+    var editorScrollX:    CGFloat = 0
+    var selectedKind:     ObstacleKind = .spike
+    var editorEraseMode   = false
+    var customObstacles:  [GDObstacle] = []
+
+    func openEditor() {
+        // Rebuild clean built-in level, preserve custom
+        buildLevel()
+        editorOpen = true
+    }
+
+    func closeEditor() {
+        editorOpen = false
+    }
+
+    func editorTest() {
+        // Merge custom obstacles into main level then play
+        obstacles.append(contentsOf: customObstacles)
+        editorOpen = false
+        restartGame()
+    }
+
+    func editorClear() {
+        customObstacles = []
+    }
+
+    /// Place or remove at a tapped canvas position.
+    func editorAction(at pos: CGPoint, size: CGSize) {
+        let worldX = pos.x + editorScrollX
+        let gY     = groundY
+
+        if editorEraseMode {
+            // Remove the first custom obstacle whose rect contains tap
+            customObstacles.removeAll { obs in
+                obs.rect.insetBy(dx: -10, dy: -10).contains(CGPoint(x: worldX, y: pos.y))
+            }
+            return
+        }
+
+        // Snap X to 40pt grid
+        let snappedX = (worldX / 40).rounded(.down) * 40
+        let obs: GDObstacle
+        switch selectedKind {
+        case .spike:
+            obs = GDObstacle(rect: CGRect(x: snappedX + 2, y: gY - 30, width: 26, height: 29),
+                             kind: .spike, colorIdx: 0)
+        case .block:
+            let ty = (pos.y / 40).rounded(.down) * 40
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: ty, width: 60, height: 60),
+                             kind: .block, colorIdx: 1)
+        case .platform:
+            let ty = (pos.y / 40).rounded(.down) * 40
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: ty, width: 120, height: 12),
+                             kind: .platform, colorIdx: 2)
+        case .ceilSpike:
+            obs = GDObstacle(rect: CGRect(x: snappedX + 2, y: 20, width: 26, height: 29),
+                             kind: .ceilSpike, colorIdx: 1)
+        case .jumpPad:
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: gY - 18, width: 36, height: 18),
+                             kind: .jumpPad, colorIdx: 0)
+        case .portal:
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: 20, width: 24, height: gY - 20),
+                             kind: .portal, colorIdx: 0)
+        }
+        customObstacles.append(obs)
+    }
+
+    func returnToEditor() {
+        // Rebuild built-in obstacles, keep custom, open editor
+        buildLevel()
+        particles = []
+        deathFlash = 0
+        editorOpen = true
+    }
 }
 
-// MARK: - ContentView
+// MARK: - ContentView (root switch)
 
 struct ContentView: View {
     @StateObject private var engine = GDEngine()
 
     var body: some View {
+        if engine.editorOpen {
+            EditorView(engine: engine)
+        } else {
+            GameView(engine: engine)
+        }
+    }
+}
+
+// MARK: - GameView
+
+struct GameView: View {
+    @ObservedObject var engine: GDEngine
+
+    var body: some View {
         GeometryReader { geo in
-            TimelineView(.animation) { tl in
-                Canvas { ctx, size in
-                    renderFrame(ctx: ctx, size: size, engine: engine)
+            ZStack(alignment: .bottom) {
+                TimelineView(.animation) { tl in
+                    Canvas { ctx, size in
+                        renderFrame(ctx: ctx, size: size, engine: engine)
+                    }
+                    .onChange(of: tl.date) { _ in
+                        engine.tick(size: geo.size)
+                    }
                 }
-                .onChange(of: tl.date) { _ in
-                    engine.tick(size: geo.size)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in
+                            engine.touchDown()
+                            engine.tap()
+                        }
+                        .onEnded { _ in engine.touchUp() }
+                )
+
+                // "Edit Level" on menu, "Return to Editor" on dead/victory
+                if engine.state == .menu {
+                    Button("Edit Level") { engine.openEditor() }
+                        .buttonStyle(GDButtonStyle(color: .purple))
+                        .padding(.bottom, 20)
+                }
+                if engine.state == .dead || engine.state == .victory {
+                    Button("↩ Editor") { engine.returnToEditor() }
+                        .buttonStyle(GDButtonStyle(color: Color(red: 0.4, green: 0, blue: 0.8)))
+                        .padding(.bottom, 20)
                 }
             }
-            .contentShape(Rectangle())
-            // Tap = cube jump; hold = ship thrust
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        engine.touchDown()
-                        engine.tap()  // also triggers cube jump on first touch
-                    }
-                    .onEnded { _ in engine.touchUp() }
-            )
         }
         .background(Color.black)
         .ignoresSafeArea()
+    }
+}
+
+struct GDButtonStyle: ButtonStyle {
+    var color: Color
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 14, weight: .bold, design: .monospaced))
+            .foregroundColor(.white)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+            .background(color.opacity(configuration.isPressed ? 0.5 : 0.85))
+            .cornerRadius(8)
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.3), lineWidth: 1))
+    }
+}
+
+// MARK: - EditorView
+
+struct EditorView: View {
+    @ObservedObject var engine: GDEngine
+    @State private var scrollStart: CGFloat = 0
+
+    let kindOptions: [(ObstacleKind, String)] = [
+        (.spike,    "▲ Spike"),
+        (.block,    "■ Block"),
+        (.platform, "— Plat"),
+        (.ceilSpike,"▼ C.Spike"),
+        (.jumpPad,  "⬆ Pad"),
+        (.portal,   "⬡ Portal"),
+    ]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // ── Top toolbar: obstacle type picker ──
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    // Erase toggle
+                    Button(engine.editorEraseMode ? "✕ Erase ON" : "✕ Erase") {
+                        engine.editorEraseMode.toggle()
+                    }
+                    .buttonStyle(GDButtonStyle(color: engine.editorEraseMode
+                        ? Color(red: 0.9, green: 0.1, blue: 0.1)
+                        : Color(red: 0.3, green: 0.1, blue: 0.4)))
+
+                    ForEach(kindOptions, id: \.1) { (kind, label) in
+                        Button(label) {
+                            engine.selectedKind = kind
+                            engine.editorEraseMode = false
+                        }
+                        .buttonStyle(GDButtonStyle(
+                            color: engine.selectedKind == kind && !engine.editorEraseMode
+                                ? Color(red: 0, green: 0.6, blue: 1)
+                                : Color(red: 0.15, green: 0.15, blue: 0.3)))
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+            .background(Color(red: 0.05, green: 0.05, blue: 0.18))
+
+            // ── Editor canvas ──
+            GeometryReader { geo in
+                Canvas { ctx, size in
+                    renderEditor(ctx: ctx, size: size, engine: engine)
+                }
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { v in
+                            if abs(v.translation.width) > 10 || abs(v.translation.height) > 10 {
+                                engine.editorScrollX = max(0, scrollStart - v.translation.width)
+                            }
+                        }
+                        .onEnded { v in
+                            let dist = hypot(v.translation.width, v.translation.height)
+                            if dist < 10 {
+                                engine.editorAction(at: v.location, size: geo.size)
+                            } else {
+                                scrollStart = engine.editorScrollX
+                            }
+                        }
+                )
+                .onAppear { scrollStart = engine.editorScrollX }
+            }
+
+            // ── Bottom toolbar: actions ──
+            HStack(spacing: 12) {
+                Button("◀ Pan") { engine.editorScrollX = max(0, engine.editorScrollX - 200) }
+                    .buttonStyle(GDButtonStyle(color: Color(red:0.2,green:0.2,blue:0.4)))
+                Button("Pan ▶") { engine.editorScrollX += 200 }
+                    .buttonStyle(GDButtonStyle(color: Color(red:0.2,green:0.2,blue:0.4)))
+                Spacer()
+                Button("🗑 Clear Custom") { engine.editorClear() }
+                    .buttonStyle(GDButtonStyle(color: Color(red:0.6,green:0.1,blue:0.1)))
+                Button("▶ Test") { engine.editorTest() }
+                    .buttonStyle(GDButtonStyle(color: Color(red:0,green:0.6,blue:0.2)))
+                Button("✕ Close") { engine.closeEditor() }
+                    .buttonStyle(GDButtonStyle(color: Color(red:0.3,green:0.3,blue:0.3)))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(red: 0.05, green: 0.05, blue: 0.18))
+        }
+        .background(Color.black)
+        .ignoresSafeArea(edges: .bottom)
     }
 }
 
@@ -939,4 +1149,144 @@ fileprivate func drawCenteredText(ctx: GraphicsContext, size: CGSize,
         .font(.system(size: 15, weight: .medium, design: .monospaced))
         .foregroundColor(.white.opacity(0.8))
     ctx.draw(t2, at: CGPoint(x: size.width/2, y: size.height/2 + 14), anchor: .center)
+}
+
+// MARK: - Editor Renderer
+
+fileprivate func renderEditor(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
+    // Dark grid background
+    ctx.fill(Path(CGRect(origin: .zero, size: size)),
+             with: .color(Color(red: 0.04, green: 0.04, blue: 0.14)))
+
+    let scroll = engine.editorScrollX
+    let gY     = engine.groundY
+
+    // Grid lines
+    let gsp: CGFloat = 40
+    var gx = -(scroll.truncatingRemainder(dividingBy: gsp))
+    while gx < size.width {
+        ctx.drawLayer { c in
+            c.opacity = 0.18
+            c.stroke(Path { p in
+                p.move(to: CGPoint(x: gx, y: 0))
+                p.addLine(to: CGPoint(x: gx, y: size.height))
+            }, with: .color(.cyan), lineWidth: 1)
+        }
+        // World X label every 200px
+        let worldX = Int(gx + scroll)
+        if worldX % 200 == 0 {
+            let lbl = Text("\(worldX)")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.white.opacity(0.4))
+            ctx.draw(lbl, at: CGPoint(x: gx + 2, y: 4), anchor: .topLeading)
+        }
+        gx += gsp
+    }
+    var gy: CGFloat = 0
+    while gy < size.height {
+        ctx.drawLayer { c in
+            c.opacity = 0.10
+            c.stroke(Path { p in
+                p.move(to: CGPoint(x: 0, y: gy))
+                p.addLine(to: CGPoint(x: size.width, y: gy))
+            }, with: .color(.cyan), lineWidth: 1)
+        }
+        gy += gsp
+    }
+
+    // Ground line
+    let groundPath = Path { p in
+        p.move(to: CGPoint(x: 0, y: gY))
+        p.addLine(to: CGPoint(x: size.width, y: gY))
+    }
+    ctx.stroke(groundPath, with: .color(Color(red: 0, green: 1, blue: 0.8)), lineWidth: 2)
+    ctx.fill(Path(CGRect(x: 0, y: gY, width: size.width, height: groundH)),
+             with: .color(Color(red: 0.03, green: 0.18, blue: 0.25)))
+
+    // Level-end marker
+    let endX = levelLen - scroll
+    if endX > 0 && endX < size.width {
+        ctx.drawLayer { c in
+            c.opacity = 0.7
+            c.stroke(Path { p in
+                p.move(to: CGPoint(x: endX, y: 0))
+                p.addLine(to: CGPoint(x: endX, y: size.height))
+            }, with: .color(.yellow), lineWidth: 2)
+        }
+        let endLbl = Text("END")
+            .font(.system(size: 11, weight: .bold, design: .monospaced))
+            .foregroundColor(.yellow)
+        ctx.draw(endLbl, at: CGPoint(x: endX + 4, y: 18), anchor: .topLeading)
+    }
+
+    // Draw built-in obstacles (dim)
+    for obs in engine.obstacles {
+        let sx = obs.rect.minX - scroll
+        guard sx > -obs.rect.width && sx < size.width else { continue }
+        let sr = CGRect(x: sx, y: obs.rect.minY, width: obs.rect.width, height: obs.rect.height)
+        ctx.drawLayer { c in
+            c.opacity = 0.45
+            drawObstacleShape(ctx: c, obs: obs, sr: sr)
+        }
+    }
+
+    // Draw custom obstacles (bright, with orange outline)
+    for obs in engine.customObstacles {
+        let sx = obs.rect.minX - scroll
+        guard sx > -obs.rect.width && sx < size.width else { continue }
+        let sr = CGRect(x: sx, y: obs.rect.minY, width: obs.rect.width, height: obs.rect.height)
+        drawObstacleShape(ctx: ctx, obs: obs, sr: sr)
+        ctx.stroke(Path(sr.insetBy(dx: -2, dy: -2)),
+                   with: .color(Color(red: 1, green: 0.6, blue: 0)), lineWidth: 2)
+    }
+
+    // Editor mode label
+    let modeStr = engine.editorEraseMode ? "ERASE MODE" : "PLACE: \(engine.selectedKind)"
+    let modeLbl = Text(modeStr)
+        .font(.system(size: 12, weight: .bold, design: .monospaced))
+        .foregroundColor(engine.editorEraseMode ? .red : .cyan)
+    ctx.draw(modeLbl, at: CGPoint(x: size.width / 2, y: 10), anchor: .top)
+}
+
+/// Draws a single obstacle's shape into a graphics context (shared by game + editor).
+fileprivate func drawObstacleShape(ctx: GraphicsContext, obs: GDObstacle, sr: CGRect) {
+    switch obs.kind {
+    case .spike:
+        let col = spikeColors[obs.colorIdx % spikeColors.count]
+        let path = Path { p in
+            p.move(to: CGPoint(x: sr.minX, y: sr.maxY))
+            p.addLine(to: CGPoint(x: sr.midX, y: sr.minY))
+            p.addLine(to: CGPoint(x: sr.maxX, y: sr.maxY))
+            p.closeSubpath()
+        }
+        ctx.fill(path, with: .color(col))
+        ctx.stroke(path, with: .color(.white.opacity(0.4)), lineWidth: 1)
+    case .ceilSpike:
+        let col = Color(red: 1, green: 0.2, blue: 0.5)
+        let path = Path { p in
+            p.move(to: CGPoint(x: sr.minX, y: sr.minY))
+            p.addLine(to: CGPoint(x: sr.maxX, y: sr.minY))
+            p.addLine(to: CGPoint(x: sr.midX, y: sr.maxY))
+            p.closeSubpath()
+        }
+        ctx.fill(path, with: .color(col))
+        ctx.stroke(path, with: .color(.white.opacity(0.4)), lineWidth: 1)
+    case .block:
+        let col = blockColors[obs.colorIdx % blockColors.count]
+        ctx.fill(Path(sr), with: .color(col))
+        ctx.stroke(Path(sr), with: .color(.white.opacity(0.4)), lineWidth: 1)
+    case .platform:
+        ctx.fill(Path(sr), with: .color(Color(red: 0.05, green: 0.65, blue: 0.45)))
+        ctx.stroke(Path(sr), with: .color(.white.opacity(0.5)), lineWidth: 1.5)
+    case .jumpPad:
+        let padCol = Color(red: 1, green: 0.85, blue: 0)
+        ctx.fill(Path(sr), with: .color(padCol))
+        ctx.stroke(Path(sr), with: .color(.white.opacity(0.5)), lineWidth: 1)
+    case .portal:
+        ctx.stroke(Path(sr), with: .color(Color(red: 0.7, green: 0.1, blue: 1)), lineWidth: 2.5)
+        ctx.drawLayer { c in
+            c.opacity = 0.2
+            c.fill(Path(sr), with: .color(Color(red: 0.7, green: 0.1, blue: 1)))
+        }
+    }
 }
