@@ -63,7 +63,7 @@ struct PowerUp {
     }
 }
 
-struct Laser   { var x, y: CGFloat; var col: Int }
+struct Laser    { var x, y: CGFloat; var col: Int }
 struct Particle { var pos, vel: CGPoint; var life, size: CGFloat; var color: Color }
 
 // MARK: - Level definitions
@@ -76,14 +76,14 @@ private func levelDefs(_ lvl: Int) -> [BrickDef] {
         out.append(BrickDef(r:r,c:c,hp:hp,ci:ci))
     }
     switch lvl {
-    case 1: // Classic
+    case 1:
         for r in 0..<5 { for c in 0..<brickCols { add(r,c,r<2 ? 2:1,r) } }
-    case 2: // Pyramid
+    case 2:
         for r in 0..<5 {
             let n = (r+1)*2-1; let s = (brickCols-n)/2
             for c in s..<s+n { add(r,c,r==0 ? 2:1,r) }
         }
-    case 3: // Diamond
+    case 3:
         let cx = 4
         for r in 0..<7 {
             let half = r<=3 ? r : 6-r
@@ -92,9 +92,9 @@ private func levelDefs(_ lvl: Int) -> [BrickDef] {
                 add(r,c,edge ? 2:1,edge ? 0:3)
             }
         }
-    case 4: // Checkerboard
+    case 4:
         for r in 0..<6 { for c in 0..<brickCols { if (r+c)%2==0 { add(r,c,r<2 ? 2:1,r%palette.count) } } }
-    case 5: // Fortress
+    case 5:
         for r in 0..<6 {
             for c in 0..<brickCols {
                 let gate = r==5 && (c==3||c==4||c==5)
@@ -102,14 +102,14 @@ private func levelDefs(_ lvl: Int) -> [BrickDef] {
             }
         }
         add(2,4,3,5); add(3,4,3,5)
-    case 6: // Herringbone
+    case 6:
         for r in 0..<6 { var c = r%2; while c < brickCols { add(r,c,2,r%palette.count); c+=2 } }
-    case 7: // Cross
+    case 7:
         for r in 0..<7 { for c in 0..<brickCols {
             let v = c==4, h = r==3
             if v||h { add(r,c,(v&&h) ? 3:2,(v&&h) ? 5:v ? 0:2) }
         } }
-    case 8: // Gauntlet
+    case 8:
         for r in 0..<7 { for c in 0..<brickCols { add(r,c,r<4 ? 2:1,r%palette.count) } }
     default: break
     }
@@ -136,7 +136,6 @@ class Game: ObservableObject {
 
     private(set) var size: CGSize = .zero
 
-    // Dynamic brick geometry
     var brickW:  CGFloat { (size.width - brickGap * CGFloat(brickCols+1)) / CGFloat(brickCols) }
     var brickOX: CGFloat { brickGap }
     var paddleY: CGFloat { size.height - 60 }
@@ -152,7 +151,6 @@ class Game: ObservableObject {
         return speedTimer > 0 ? s*1.65 : s
     }
 
-    // MARK: Start / reset
     func startGame(in sz: CGSize) {
         size = sz; score = 0; lives = 3; level = 1
         beginLevel()
@@ -162,15 +160,13 @@ class Game: ObservableObject {
         paddleW = defPaddleW; paddleX = size.width/2
         wideTimer = 0; speedTimer = 0
         powerups = []; lasers = []
-        bricks = levelDefs(level).map {
-            Brick(hp: $0.hp, row: $0.r, col: $0.c, styleIdx: $0.ci)
-        }
+        bricks = levelDefs(level).map { Brick(hp:$0.hp, row:$0.r, col:$0.c, styleIdx:$0.ci) }
         resetBall()
         phase = .playing
     }
 
     private func resetBall() {
-        balls = [Ball(pos: CGPoint(x: paddleX, y: paddleY-ballR-2),
+        balls = [Ball(pos: CGPoint(x:paddleX, y:paddleY-ballR-2),
                       vel: .zero, launched: false, primary: true, color: .yellow)]
     }
 
@@ -186,15 +182,10 @@ class Game: ObservableObject {
         paddleX = x.clamped(to: paddleW/2...size.width-paddleW/2)
     }
 
-    // MARK: Update (called every frame)
     func update() {
         guard phase == .playing else { return }
-        tickTimers()
-        snapUnlaunched()
-        moveBalls()
-        movePowerups()
-        moveLasers()
-        tickParticles()
+        tickTimers(); snapUnlaunched(); moveBalls()
+        movePowerups(); moveLasers(); tickParticles()
         if bricks.allSatisfy({ !$0.alive }) { endLevel() }
     }
 
@@ -223,28 +214,24 @@ class Game: ObservableObject {
                 else { remove.append(i) }
                 continue
             }
-            paddleBounce(i)
-            brickCollide(i)
+            paddleBounce(i); brickCollide(i)
         }
         for i in remove.reversed() { balls.remove(at: i) }
     }
 
     private func wallBounce(_ i: Int) {
         var b = balls[i]
-        if b.pos.x-ballR <= 0     { b.pos.x=ballR;              b.vel.x=abs(b.vel.x)  }
-        if b.pos.x+ballR >= size.width  { b.pos.x=size.width-ballR;  b.vel.x = -abs(b.vel.x) }
-        if b.pos.y-ballR <= 0     { b.pos.y=ballR;              b.vel.y=abs(b.vel.y)  }
+        if b.pos.x-ballR <= 0          { b.pos.x=ballR;             b.vel.x=abs(b.vel.x) }
+        if b.pos.x+ballR >= size.width { b.pos.x=size.width-ballR;  b.vel.x = -abs(b.vel.x) }
+        if b.pos.y-ballR <= 0          { b.pos.y=ballR;             b.vel.y=abs(b.vel.y) }
         balls[i] = b
     }
 
     private func paddleBounce(_ i: Int) {
-        let b = balls[i]
-        let py = paddleY
+        let b = balls[i]; let py = paddleY
         guard b.vel.y > 0,
-              b.pos.y+ballR >= py-paddleH/2,
-              b.pos.y-ballR <= py+paddleH/2,
-              b.pos.x >= paddleX-paddleW/2,
-              b.pos.x <= paddleX+paddleW/2 else { return }
+              b.pos.y+ballR >= py-paddleH/2, b.pos.y-ballR <= py+paddleH/2,
+              b.pos.x >= paddleX-paddleW/2,  b.pos.x <= paddleX+paddleW/2 else { return }
         balls[i].pos.y = py-paddleH/2-ballR
         balls[i].vel.y = -abs(b.vel.y)
         let rel = (b.pos.x-paddleX)/(paddleW/2)
@@ -253,8 +240,7 @@ class Game: ObservableObject {
     }
 
     private func brickCollide(_ i: Int) {
-        let br = CGRect(x: balls[i].pos.x-ballR, y: balls[i].pos.y-ballR,
-                        width: ballR*2, height: ballR*2)
+        let br = CGRect(x:balls[i].pos.x-ballR, y:balls[i].pos.y-ballR, width:ballR*2, height:ballR*2)
         for j in bricks.indices {
             guard bricks[j].alive else { continue }
             let rect = brickRect(bricks[j])
@@ -266,9 +252,8 @@ class Game: ObservableObject {
                 spawn(at: CGPoint(x:rect.midX,y:rect.midY), color: bricks[j].style.fill)
                 tryDrop(bricks[j])
             }
-            // Determine bounce axis
             let ol = br.maxX-rect.minX, or_ = rect.maxX-br.minX
-            let ot = br.maxY-rect.minY, ob  = rect.maxY-br.minY
+            let ot = br.maxY-rect.minY, ob   = rect.maxY-br.minY
             if min(ot,ob) < min(ol,or_) { balls[i].vel.y *= -1 } else { balls[i].vel.x *= -1 }
             break
         }
@@ -280,9 +265,7 @@ class Game: ObservableObject {
             let pu = powerups[i]
             if pu.pos.y+puH >= paddleY-paddleH/2,
                pu.pos.x+puW >= paddleX-paddleW/2,
-               pu.pos.x     <= paddleX+paddleW/2 {
-                collect(pu); powerups.remove(at: i); continue
-            }
+               pu.pos.x     <= paddleX+paddleW/2 { collect(pu); powerups.remove(at: i); continue }
             if pu.pos.y > size.height { powerups.remove(at: i) }
         }
     }
@@ -333,9 +316,8 @@ class Game: ObservableObject {
         for _ in 0..<12 {
             let a = CGFloat.random(in:0...CGFloat.pi*2)
             let s = CGFloat.random(in:1.5...5)
-            particles.append(Particle(
-                pos: pt, vel: CGPoint(x:cos(a)*s, y:sin(a)*s),
-                life: 1, size: CGFloat.random(in:2...5), color: color))
+            particles.append(Particle(pos:pt, vel:CGPoint(x:cos(a)*s,y:sin(a)*s),
+                                      life:1, size:CGFloat.random(in:2...5), color:color))
         }
     }
 
@@ -343,7 +325,7 @@ class Game: ObservableObject {
         guard Double.random(in:0...1) < 0.3 else { return }
         let rect = brickRect(b)
         let kind = PowerUp.Kind.allCases.randomElement()!
-        powerups.append(PowerUp(pos: CGPoint(x:rect.midX-puW/2, y:rect.minY), kind: kind, col: b.col))
+        powerups.append(PowerUp(pos:CGPoint(x:rect.midX-puW/2, y:rect.minY), kind:kind, col:b.col))
     }
 
     private func collect(_ pu: PowerUp) {
@@ -359,15 +341,13 @@ class Game: ObservableObject {
             let colors: [Color] = [.cyan, Color(red:1,green:0,blue:0.5), .green, Color(red:0.73,green:0.27,blue:1)]
             for i in 0..<2 {
                 let angle = -CGFloat.pi/2 + (i==0 ? -0.6 : 0.6)
-                balls.append(Ball(
-                    pos: ref.pos,
-                    vel: CGPoint(x:cos(angle)*spd, y:sin(angle)*spd),
-                    launched: true, primary: false,
-                    color: colors[(balls.count+i) % colors.count]))
+                balls.append(Ball(pos:ref.pos, vel:CGPoint(x:cos(angle)*spd, y:sin(angle)*spd),
+                                  launched:true, primary:false,
+                                  color:colors[(balls.count+i) % colors.count]))
             }
         case .laser:
             let lx = brickOX + CGFloat(pu.col)*(brickW+brickGap) + brickW/2
-            lasers.append(Laser(x: lx, y: paddleY, col: pu.col))
+            lasers.append(Laser(x:lx, y:paddleY, col:pu.col))
         case .speed:
             speedTimer = 480; normalizeBalls()
         }
@@ -396,63 +376,134 @@ struct ContentView: View {
     @StateObject private var game = Game()
     let timer = Timer.publish(every: 1/60, on: .main, in: .common).autoconnect()
 
+    // Title flicker state
+    @State private var titleOpacity: Double = 1.0
+
+    // MARK: body
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                Color(red:0.02,green:0.04,blue:0.08).ignoresSafeArea()
+        VStack(spacing: 0) {
+            titleHeader
+            hudBar
 
-                Canvas { ctx, size in
-                    render(ctx: ctx, size: size)
-                }
-                .ignoresSafeArea()
+            GeometryReader { geo in
+                ZStack {
+                    // Canvas background (slightly lighter than body — matches HTML #080f1e)
+                    Color(red:0.031, green:0.059, blue:0.118)
 
-                // HUD
-                VStack {
-                    HStack(spacing: 24) {
-                        hud("SCORE", "\(game.score)")
-                        hud("LEVEL", "\(game.level)")
-                        hud("LIVES", String(repeating:"♥ ", count:max(0,game.lives)).trimmingCharacters(in:.whitespaces))
+                    Canvas { ctx, size in render(ctx:ctx, size:size) }
+
+                    // Overlays
+                    switch game.phase {
+                    case .menu:
+                        modal(title:"BRICK BREAKER", sub:"DRAG TO MOVE · TAP TO LAUNCH",
+                              btn:"START GAME", color:.cyan) { game.startGame(in: geo.size) }
+                    case .levelClear:
+                        let names = ["","CLASSIC","PYRAMID","DIAMOND","CHECKERBOARD","FORTRESS","HERRINGBONE","CROSS","GAUNTLET"]
+                        modal(title:"STAGE \(game.level) CLEAR!",
+                              sub:"\(names[min(game.level,8)]) COMPLETE · SCORE: \(game.score)",
+                              btn:"START STAGE \(game.level+1)", color:.cyan) { game.nextLevel() }
+                    case .won:
+                        modal(title:"YOU WIN!", sub:"ALL 8 STAGES · FINAL SCORE: \(game.score)",
+                              btn:"PLAY AGAIN", color:Color(red:1,green:0.9,blue:0)) { game.restart(in:geo.size) }
+                    case .lost:
+                        modal(title:"GAME OVER", sub:"SCORE: \(game.score)",
+                              btn:"PLAY AGAIN", color:Color(red:1,green:0,blue:0.5)) { game.restart(in:geo.size) }
+                    case .playing:
+                        EmptyView()
                     }
-                    .padding(.top, 8)
-                    Spacer()
                 }
-
-                // Overlay
-                switch game.phase {
-                case .menu:
-                    modal(title:"BRICK BREAKER", sub:"DRAG TO MOVE · TAP TO LAUNCH",
-                          btn:"START GAME", color:.cyan) { game.startGame(in: geo.size) }
-                case .levelClear:
-                    let names = ["","CLASSIC","PYRAMID","DIAMOND","CHECKERBOARD","FORTRESS","HERRINGBONE","CROSS","GAUNTLET"]
-                    modal(title:"STAGE \(game.level) CLEAR!",
-                          sub:"\(names[min(game.level,8)]) COMPLETE · SCORE: \(game.score)",
-                          btn:"START STAGE \(game.level+1)", color:.cyan) { game.nextLevel() }
-                case .won:
-                    modal(title:"YOU WIN!", sub:"ALL 8 STAGES · FINAL SCORE: \(game.score)",
-                          btn:"PLAY AGAIN", color:Color(red:1,green:0.9,blue:0)) { game.restart(in:geo.size) }
-                case .lost:
-                    modal(title:"GAME OVER", sub:"SCORE: \(game.score)",
-                          btn:"PLAY AGAIN", color:Color(red:1,green:0,blue:0.5)) { game.restart(in:geo.size) }
-                case .playing:
-                    EmptyView()
-                }
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { v in
+                            if game.phase == .menu { game.startGame(in: geo.size) }
+                            game.movePaddle(to: v.location.x)
+                        }
+                )
+                .simultaneousGesture(
+                    TapGesture().onEnded { if game.phase == .playing { game.launch() } }
+                )
+                .onReceive(timer) { _ in game.update() }
             }
-            .onAppear { /* wait for START tap */ }
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { v in
-                        if game.phase == .menu { game.startGame(in: geo.size) }
-                        game.movePaddle(to: v.location.x)
-                    }
+            // Canvas border + outer glow matching .canvas-wrap
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(Color(red:0,green:0.96,blue:1).opacity(0.2), lineWidth:1)
             )
-            .simultaneousGesture(
-                TapGesture().onEnded { if game.phase == .playing { game.launch() } }
-            )
-            .onReceive(timer) { _ in game.update() }
+            .shadow(color: Color(red:0,green:0.96,blue:1).opacity(0.1), radius:30)
+
+            legendRow
+            footerView
+        }
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(red:0.02,green:0.04,blue:0.08).ignoresSafeArea())
+        // Title flicker loop
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_700_000_000)
+                withAnimation(.linear(duration: 0.08)) { titleOpacity = 0.85 }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                withAnimation(.linear(duration: 0.08)) { titleOpacity = 1.0 }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                withAnimation(.linear(duration: 0.08)) { titleOpacity = 0.9 }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                withAnimation(.linear(duration: 0.08)) { titleOpacity = 1.0 }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
         }
     }
 
-    // MARK: Canvas renderer
+    // MARK: - Chrome views
+
+    private var titleHeader: some View {
+        Text("BRICK BREAKER")
+            .font(.system(size: 22, weight: .black, design: .monospaced))
+            .tracking(5)
+            .foregroundColor(Color(red:0, green:0.96, blue:1))
+            .shadow(color: Color(red:0, green:0.96, blue:1), radius: 10)
+            .shadow(color: Color(red:0, green:0.96, blue:1).opacity(0.4), radius: 20)
+            .opacity(titleOpacity)
+            .padding(.bottom, 5)
+    }
+
+    private var hudBar: some View {
+        HStack(spacing: 32) {
+            hudItem("SCORE", "\(game.score)")
+            hudItem("LEVEL", "\(game.level)")
+            hudItem("LIVES", String(repeating:"♥ ", count:max(0,game.lives)).trimmingCharacters(in:.whitespaces))
+        }
+        .padding(.bottom, 6)
+    }
+
+    private var legendRow: some View {
+        let items: [(Color, String)] = [
+            (Color(red:1,   green:0.27, blue:0),    "ZAP — clears column"),
+            (Color(red:0,   green:0.4,  blue:1),    "3-BALL"),
+            (Color(red:0.67,green:0,    blue:1),    "WIDE paddle"),
+            (Color(red:0,   green:1,    blue:0.53), "SPEED boost"),
+        ]
+        return HStack(spacing: 10) {
+            ForEach(items.indices, id:\.self) { i in
+                HStack(spacing: 4) {
+                    Circle().fill(items[i].0).frame(width:7, height:7)
+                    Text(items[i].1)
+                }
+            }
+        }
+        .font(.system(size: 8, design: .monospaced))
+        .foregroundColor(.white.opacity(0.28))
+        .padding(.top, 5)
+    }
+
+    private var footerView: some View {
+        Text("DRAG TO MOVE PADDLE  |  TAP TO LAUNCH")
+            .font(.system(size: 8, design: .monospaced))
+            .foregroundColor(.white.opacity(0.16))
+            .tracking(1)
+            .padding(.top, 4)
+    }
+
+    // MARK: - Canvas renderer
     func render(ctx: GraphicsContext, size: CGSize) {
         // Grid
         var grid = Path()
@@ -475,10 +526,8 @@ struct ContentView: View {
                 c.opacity = b.hp < 2 ? 1.0 : 0.75
                 c.addFilter(.shadow(color: b.style.fill.opacity(0.7), radius: 8))
                 c.fill(Path(roundedRect:rect,cornerRadius:3), with:.color(b.style.fill))
-                // top highlight
                 c.fill(Path(CGRect(x:rect.minX,y:rect.minY,width:rect.width,height:rect.height*0.45)),
                        with:.color(.white.opacity(0.18)))
-                // hp dot
                 if b.hp >= 2 {
                     let d = Path(ellipseIn: CGRect(x:rect.maxX-8,y:rect.midY-2.5,width:5,height:5))
                     c.fill(d, with:.color(.white.opacity(0.7)))
@@ -522,10 +571,9 @@ struct ContentView: View {
         }
 
         // Paddle
-        let pc: Color = game.wideTimer>0 ? Color(red:0.8,green:0.27,blue:1) :
+        let pc: Color = game.wideTimer>0  ? Color(red:0.8,green:0.27,blue:1) :
                         game.speedTimer>0 ? Color(red:0,green:1,blue:0.53) : .cyan
-        let pr = CGRect(x:game.paddleX-game.paddleW/2,
-                        y:game.paddleY-paddleH/2,
+        let pr = CGRect(x:game.paddleX-game.paddleW/2, y:game.paddleY-paddleH/2,
                         width:game.paddleW, height:paddleH)
         ctx.drawLayer { c in
             c.addFilter(.shadow(color:pc, radius:14))
@@ -568,16 +616,15 @@ struct ContentView: View {
             let names = ["","CLASSIC","PYRAMID","DIAMOND","CHECKERBOARD","FORTRESS","HERRINGBONE","CROSS","GAUNTLET"]
             ctx.opacity = 0.18
             ctx.draw(Text(names[min(game.level,8)])
-                .font(.system(size:9,design:.monospaced))
-                .foregroundColor(.white),
+                .font(.system(size:9,design:.monospaced)).foregroundColor(.white),
                      at:CGPoint(x:size.width-40,y:size.height-10))
             ctx.opacity = 1
         }
     }
 
-    // MARK: HUD / overlay helpers
+    // MARK: - HUD / overlay helpers
     @ViewBuilder
-    func hud(_ label: String, _ value: String) -> some View {
+    private func hudItem(_ label: String, _ value: String) -> some View {
         VStack(spacing: 2) {
             Text(label)
                 .font(.system(size:9, weight:.regular, design:.monospaced))
@@ -590,10 +637,10 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    func modal(title:String, sub:String, btn:String, color:Color, action: @escaping ()->Void) -> some View {
+    private func modal(title:String, sub:String, btn:String, color:Color, action: @escaping ()->Void) -> some View {
         VStack(spacing:16) {
             Text(title)
-                .font(.system(size:26,weight:.black,design:.rounded))
+                .font(.system(size:24,weight:.black,design:.rounded))
                 .foregroundColor(color)
                 .multilineTextAlignment(.center)
             Text(sub)
@@ -607,7 +654,7 @@ struct ContentView: View {
                 .foregroundColor(color)
         }
         .padding(40)
-        .background(.black.opacity(0.85))
+        .background(Color(red:0.02,green:0.04,blue:0.08).opacity(0.88))
         .clipShape(RoundedRectangle(cornerRadius:16))
     }
 }
