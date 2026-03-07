@@ -26,6 +26,12 @@ let BRICK_OFFSET_X: CGFloat = (GW - CGFloat(BRICK_COLS) * (BRICK_W + BRICK_GAP) 
 // Top offset in HTML coords (44 px from top of canvas)
 let BRICK_OFFSET_Y_HTML: CGFloat = 44
 
+// Paddle
+let PADDLE_W: CGFloat = 90
+let PADDLE_H: CGFloat = 10
+// HTML: paddle.y = GH-36, occupies rows 484–494 from top → SpriteKit centre = 31
+let PADDLE_Y_CENTER: CGFloat = 31
+
 // ─── Brick colour table ──────────────────────────────────────────────────────
 struct BrickColor {
     let fill: SKColor
@@ -135,6 +141,20 @@ struct BrickLive {
     var col:      Int
 }
 
+// Paddle colours depending on active power-up
+enum PaddleStyle { case normal, wide, speed }
+
+func paddleColors(_ style: PaddleStyle) -> (fill: SKColor, stroke: SKColor) {
+    switch style {
+    case .normal: return (SKColor(red:0,    green:0.96, blue:1,  alpha:1),
+                          SKColor(red:0,    green:0.96, blue:1,  alpha:0.5))
+    case .wide:   return (SKColor(red:0.8,  green:0.27, blue:1,  alpha:1),
+                          SKColor(red:0.8,  green:0.27, blue:1,  alpha:0.5))
+    case .speed:  return (SKColor(red:0,    green:1,    blue:0.53, alpha:1),
+                          SKColor(red:0,    green:1,    blue:0.53, alpha:0.5))
+    }
+}
+
 // ─── Scene ───────────────────────────────────────────────────────────────────
 class BrickBreakerScene: SKScene {
     weak var model: GameModel?
@@ -142,9 +162,24 @@ class BrickBreakerScene: SKScene {
     // brick nodes; name = "b_row_col"
     private(set) var brickLive: [SKNode: BrickLive] = [:]
 
+    // ── Paddle state ─────────────────────────────────────────────────────────
+    private var paddleNode: SKShapeNode!
+    // left-edge X of paddle in scene coords
+    var paddleX: CGFloat = GW / 2 - PADDLE_W / 2
+    var paddleWidth: CGFloat = PADDLE_W
+
+    // drag tracking
+    private var dragStartTouchX:  CGFloat = 0
+    private var dragStartPaddleX: CGFloat = 0
+    private var dragMoved = false
+
+    // callback so ContentView can react to a "tap" (future ball launch)
+    var onTap: (() -> Void)?
+
     override func didMove(to view: SKView) {
         backgroundColor = .bgCanvas
         drawGrid()
+        buildPaddle()
     }
 
     // ── Grid ────────────────────────────────────────────────────────────────
@@ -160,6 +195,59 @@ class BrickBreakerScene: SKScene {
             let l = SKShapeNode(rect: CGRect(x: 0, y: y, width: GW, height: 1))
             l.fillColor = .gridLine; l.strokeColor = .clear; l.zPosition = 0; addChild(l); y += step
         }
+    }
+
+    // ── Paddle ───────────────────────────────────────────────────────────────
+    private func buildPaddle() {
+        let rect = CGRect(x: -paddleWidth/2, y: -PADDLE_H/2, width: paddleWidth, height: PADDLE_H)
+        paddleNode = SKShapeNode(rect: rect, cornerRadius: PADDLE_H/2)
+        let c = paddleColors(.normal)
+        paddleNode.fillColor   = c.fill
+        paddleNode.strokeColor = c.stroke
+        paddleNode.lineWidth   = 4
+        paddleNode.position    = CGPoint(x: paddleX + paddleWidth/2, y: PADDLE_Y_CENTER)
+        paddleNode.zPosition   = 5
+        paddleNode.name        = "paddle"
+        addChild(paddleNode)
+    }
+
+    func updatePaddleNode(style: PaddleStyle = .normal) {
+        let rect = CGRect(x: -paddleWidth/2, y: -PADDLE_H/2, width: paddleWidth, height: PADDLE_H)
+        paddleNode.path = CGPath(roundedRect: rect, cornerWidth: PADDLE_H/2,
+                                 cornerHeight: PADDLE_H/2, transform: nil)
+        let c = paddleColors(style)
+        paddleNode.fillColor   = c.fill
+        paddleNode.strokeColor = c.stroke
+        paddleNode.position    = CGPoint(x: paddleX + paddleWidth/2, y: PADDLE_Y_CENTER)
+    }
+
+    // Clamp paddle left-edge inside canvas
+    private func clampPaddle() {
+        paddleX = max(0, min(GW - paddleWidth, paddleX))
+        paddleNode.position = CGPoint(x: paddleX + paddleWidth/2, y: PADDLE_Y_CENTER)
+    }
+
+    // ── Touch input ──────────────────────────────────────────────────────────
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let t = touches.first else { return }
+        let p = t.location(in: self)
+        dragStartTouchX  = p.x
+        dragStartPaddleX = paddleX
+        dragMoved = false
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let t = touches.first else { return }
+        let p = t.location(in: self)
+        let delta = p.x - dragStartTouchX
+        if abs(delta) > 4 { dragMoved = true }
+        paddleX = dragStartPaddleX + delta
+        clampPaddle()
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if !dragMoved { onTap?() }
+        dragMoved = false
     }
 
     // ── Build bricks ─────────────────────────────────────────────────────────
@@ -222,6 +310,12 @@ class BrickBreakerScene: SKScene {
     }
 
     var allBricksCleared: Bool { brickLive.isEmpty }
+
+    func resetPaddle() {
+        paddleWidth = PADDLE_W
+        paddleX     = GW / 2 - PADDLE_W / 2
+        updatePaddleNode()
+    }
 }
 
 // ─── HUD bar ─────────────────────────────────────────────────────────────────
@@ -350,6 +444,7 @@ struct ContentView: View {
         model.lives = 3
         model.level = 1
         model.state = .playing
+        scene.resetPaddle()
         scene.buildBricks()
     }
 }
