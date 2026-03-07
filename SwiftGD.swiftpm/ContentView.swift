@@ -436,7 +436,7 @@ struct ContentView: View {
         }
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(red:0.02,green:0.04,blue:0.08).ignoresSafeArea())
+        .background(atmosphereBackground)
         // Title flicker loop
         .task {
             while !Task.isCancelled {
@@ -451,6 +451,54 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 20_000_000)
             }
         }
+    }
+
+    // MARK: - Atmospheric background (body::before radial glows + body::after scanlines)
+    private var atmosphereBackground: some View {
+        GeometryReader { geo in
+            ZStack {
+                // Base dark fill
+                Color(red:0.02,green:0.04,blue:0.08)
+
+                // body::before — two corner radial glows
+                Canvas { ctx, size in
+                    // Cyan glow top-left (20%, 20%)
+                    let cyanCenter = CGPoint(x: size.width*0.2, y: size.height*0.2)
+                    let cyanRadius = max(size.width, size.height) * 0.6
+                    ctx.fill(
+                        Path(ellipseIn: CGRect(x: cyanCenter.x-cyanRadius, y: cyanCenter.y-cyanRadius,
+                                               width: cyanRadius*2, height: cyanRadius*2)),
+                        with: .radialGradient(
+                            Gradient(colors: [Color(red:0,green:0.96,blue:1,opacity:0.06), .clear]),
+                            center: UnitPoint(x: 0.5, y: 0.5),
+                            startRadius: 0, endRadius: cyanRadius)
+                    )
+                    // Pink glow bottom-right (80%, 80%)
+                    let pinkCenter = CGPoint(x: size.width*0.8, y: size.height*0.8)
+                    let pinkRadius = max(size.width, size.height) * 0.6
+                    ctx.fill(
+                        Path(ellipseIn: CGRect(x: pinkCenter.x-pinkRadius, y: pinkCenter.y-pinkRadius,
+                                               width: pinkRadius*2, height: pinkRadius*2)),
+                        with: .radialGradient(
+                            Gradient(colors: [Color(red:1,green:0,blue:0.5,opacity:0.06), .clear]),
+                            center: UnitPoint(x: 0.5, y: 0.5),
+                            startRadius: 0, endRadius: pinkRadius)
+                    )
+                }
+
+                // body::after — scanline stripe overlay
+                Canvas { ctx, size in
+                    var y: CGFloat = 3
+                    while y < size.height {
+                        ctx.fill(Path(CGRect(x:0, y:y, width:size.width, height:1)),
+                                 with:.color(.black.opacity(0.15)))
+                        y += 4
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+        }
+        .ignoresSafeArea()
     }
 
     // MARK: - Chrome views
