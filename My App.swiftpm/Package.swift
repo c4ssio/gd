@@ -8,18 +8,18 @@ import PackageDescription
 import AppleProductTypes
 
 let package = Package(
-    name: "SwiftGD",
+    name: "My App",
     platforms: [
         .iOS("18.1")
     ],
     products: [
         .iOSApplication(
-            name: "SwiftGD",
+            name: "My App",
             targets: ["AppModule"],
             displayVersion: "1.0",
             bundleVersion: "1",
-            appIcon: .placeholder(icon: .star),
-            accentColor: .presetColor(.yellow),
+            appIcon: .placeholder(icon: .bandage),
+            accentColor: .presetColor(.pink),
             supportedDeviceFamilies: [
                 .pad,
                 .phone
