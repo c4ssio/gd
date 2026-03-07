@@ -6,14 +6,14 @@ fileprivate let playerH:    CGFloat = 30
 fileprivate let gravity:    CGFloat = 0.65
 fileprivate let jumpVel:    CGFloat = -13.5
 fileprivate let scrollSpd:  CGFloat = 5
-fileprivate let levelLen:   CGFloat = 5200
+fileprivate let levelLen:   CGFloat = 6500
 fileprivate let groundH:    CGFloat = 50
 
 // MARK: - Types
 
 enum GDState { case menu, playing, dead, victory }
 
-enum ObstacleKind { case spike, block, platform }
+enum ObstacleKind { case spike, block, platform, ceilSpike, jumpPad }
 
 struct GDObstacle {
     var rect: CGRect
@@ -62,6 +62,9 @@ class GDEngine: ObservableObject {
     var particles: [GDParticle] = []
     var stars: [GDStar] = []
 
+    // Floor gaps: world-x ranges where floor is absent
+    var floorGaps: [(start: CGFloat, end: CGFloat)] = []
+
     // Screen shake
     var shakeTimer: CGFloat = 0
     var shakeX: CGFloat = 0
@@ -105,60 +108,92 @@ class GDEngine: ObservableObject {
 
     func buildLevel() {
         obstacles = []
+        floorGaps = []
         let gY = groundY
 
-        // Spike on ground: triangle bounding rect
-        func spike(_ x: CGFloat) {
+        // Ground spike (cyan, triangle)
+        func spike(_ x: CGFloat, _ ci: Int = 0) {
             obstacles.append(GDObstacle(
                 rect: CGRect(x: x + 2, y: gY - 30, width: 26, height: 29),
-                kind: .spike, colorIdx: 0))
+                kind: .spike, colorIdx: ci))
         }
-
-        // Solid block (wall / raised block)
+        // Ceiling spike (inverted, hangs from top + some offset)
+        func cSpike(_ x: CGFloat, _ y: CGFloat) {
+            obstacles.append(GDObstacle(
+                rect: CGRect(x: x + 2, y: y, width: 26, height: 29),
+                kind: .ceilSpike, colorIdx: 1))
+        }
+        // Solid block
         func block(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ ci: Int = 1) {
             obstacles.append(GDObstacle(
                 rect: CGRect(x: x, y: y, width: w, height: h),
                 kind: .block, colorIdx: ci))
         }
-
-        // Thin platform (land on top)
+        // Thin platform
         func plat(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat) {
             obstacles.append(GDObstacle(
                 rect: CGRect(x: x, y: y, width: w, height: 12),
                 kind: .platform, colorIdx: 2))
         }
+        // Jump pad (on ground)
+        func pad(_ x: CGFloat) {
+            obstacles.append(GDObstacle(
+                rect: CGRect(x: x, y: gY - 18, width: 36, height: 18),
+                kind: .jumpPad, colorIdx: 0))
+        }
+        // Floor gap
+        func pit(_ start: CGFloat, _ end: CGFloat) {
+            floorGaps.append((start: start, end: end))
+        }
 
-        // --- Section 1: Tutorial single spikes (x 350–1100) ---
-        spike(350); spike(530); spike(710); spike(890); spike(1070)
+        // ── Section 1: Tutorial — gentle single spikes ──────────── x 300–1150
+        spike(300); spike(480); spike(660); spike(840); spike(1020)
 
-        // --- Section 2: Double spikes (x 1300–2000) ---
+        // ── Section 2: Double spikes + a jump pad ───────────────── x 1300–2100
         for i in 0..<4 {
-            let bx = 1300 + CGFloat(i) * 190
+            let bx = 1300 + CGFloat(i) * 200
             spike(bx); spike(bx + 32)
         }
+        pad(2000)   // teach the jump pad mechanic
 
-        // --- Section 3: Step platforms (x 2200–3000) ---
-        plat(2200, gY - 80, 160)
-        spike(2420)
-        plat(2500, gY - 130, 130)
-        plat(2720, gY - 80, 130)
-        spike(2900); spike(2932)
+        // ── Section 3: Platforms + ceiling threat ───────────────── x 2300–3100
+        plat(2300, gY - 80,  150)
+        cSpike(2370, 30)
+        spike(2510)
+        plat(2600, gY - 130, 120)
+        cSpike(2640, 20)
+        plat(2820, gY - 80,  120)
+        spike(2980); spike(3012)
 
-        // --- Section 4: Raised blocks + spikes (x 3200–4000) ---
-        block(3200, gY - 60, 60, 60, 1)
-        spike(3310); spike(3342)
-        block(3500, gY - 90, 60, 90, 2)
-        spike(3620); spike(3652); spike(3684)
-        block(3800, gY - 60, 60, 60, 1)
-        spike(3920)
+        // ── Section 4: Death pits ────────────────────────────────── x 3300–4100
+        // Floor gaps — player must jump over them
+        pit(3350, 3470)         // first pit
+        spike(3510)             // spike right after pit edge
+        pit(3700, 3820)         // second pit, wider
+        pad(3830)               // jump pad to clear next section
+        pit(4050, 4130)         // tight pit
 
-        // --- Section 5: Final gauntlet (x 4200–5000) ---
-        for i in 0..<5 {
-            let bx = 4200 + CGFloat(i) * 140
-            spike(bx)
-            if i % 2 == 0 { spike(bx + 32) }
+        // ── Section 5: Block maze + ceiling spikes ───────────────── x 4300–5300
+        block(4300, gY - 60,  60,  60, 1)
+        spike(4410); spike(4442)
+        block(4550, gY - 90,  60,  90, 2)
+        cSpike(4570, 15)
+        spike(4660); spike(4692); spike(4724)
+        block(4800, gY - 60,  60,  60, 1)
+        spike(4910)
+        plat(5050, gY - 110, 120)
+        cSpike(5080, 25)
+        spike(5200); spike(5232)
+
+        // ── Section 6: Final gauntlet ────────────────────────────── x 5500–6300
+        for i in 0..<6 {
+            let bx = 5500 + CGFloat(i) * 130
+            spike(bx, i % 3)
+            if i % 2 == 0 { spike(bx + 32, (i+1) % 3) }
         }
-        spike(4900); spike(4932); spike(4964)
+        pit(6100, 6200)
+        spike(6230); spike(6262); spike(6294)
+        pad(6380)
     }
 
     // MARK: Input
@@ -222,12 +257,17 @@ class GDEngine: ObservableObject {
         cubeAngle = scrollX * 0.09  // slow rotation as level scrolls
         progress = min(1, scrollX / levelLen)
 
-        // Ground
+        // Ground — only if player is NOT over a floor gap
         let floorY = groundY - playerH
-        if playerY >= floorY {
+        let pLeftWorld  = scrollX + playerX
+        let pRightWorld = scrollX + playerX + playerW
+        let overGap = floorGaps.contains { pRightWorld > $0.start && pLeftWorld < $0.end }
+        if !overGap && playerY >= floorY {
             playerY = floorY
             velY = 0
             onGround = true
+        } else if overGap {
+            onGround = false
         } else {
             onGround = false
         }
@@ -248,8 +288,20 @@ class GDEngine: ObservableObject {
             guard pRect.intersects(sRect) else { continue }
 
             switch obs.kind {
-            case .spike:
+            case .spike, .ceilSpike:
                 die(size: size); return
+
+            case .jumpPad:
+                // Bounce — only trigger if coming down onto it
+                let prevBottom = playerY + playerH - velY
+                if prevBottom <= sRect.minY + 6 && velY >= 0 {
+                    playerY = sRect.minY - playerH
+                    velY = jumpVel * 1.35   // ~18% stronger than normal jump
+                    onGround = false
+                    spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH),
+                                   count: 10, speed: 2...5, life: 0.5,
+                                   colors: [.yellow, Color(red:1,green:0.8,blue:0), .white])
+                }
 
             case .block, .platform:
                 // Land on top if coming down
@@ -302,6 +354,8 @@ class GDEngine: ObservableObject {
         onGround = false
         particles = []
         deathFlash = 0
+        shakeTimer = 0
+        shakeX = 0; shakeY = 0
         state = .playing
     }
 
@@ -426,38 +480,74 @@ fileprivate func drawStars(ctx: GraphicsContext, size: CGSize, engine: GDEngine)
 }
 
 fileprivate func drawGround(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
-    let gY = engine.groundY
-    // Ground base
-    ctx.fill(Path(CGRect(x: 0, y: gY, width: size.width, height: groundH)),
-             with: .color(Color(red: 0.03, green: 0.18, blue: 0.25)))
+    let gY   = engine.groundY
+    let gCol = Color(red: 0.03, green: 0.18, blue: 0.25)
+    let edgeCol = Color(red: 0, green: 1, blue: 0.9)
 
-    // Vertical grid lines on ground (tiled, scroll with world)
+    // Build sorted list of gap screen-x ranges
+    let gaps: [(CGFloat, CGFloat)] = engine.floorGaps
+        .map { (($0.start - engine.scrollX), ($0.end - engine.scrollX)) }
+        .filter { $0.1 > 0 && $0.0 < size.width }
+        .sorted { $0.0 < $1.0 }
+
+    // Draw ground segments between gaps
+    var cursor: CGFloat = 0
+    for gap in gaps {
+        let segEnd = max(cursor, min(gap.0, size.width))
+        if segEnd > cursor {
+            let segRect = CGRect(x: cursor, y: gY, width: segEnd - cursor, height: groundH)
+            ctx.fill(Path(segRect), with: .color(gCol))
+            // edge glow on that segment
+            let edge = Path { p in
+                p.move(to: CGPoint(x: cursor, y: gY))
+                p.addLine(to: CGPoint(x: segEnd, y: gY))
+            }
+            ctx.stroke(edge, with: .color(edgeCol), lineWidth: 2.5)
+        }
+        cursor = max(cursor, gap.1)
+    }
+    // Final segment after last gap
+    if cursor < size.width {
+        let segRect = CGRect(x: cursor, y: gY, width: size.width - cursor, height: groundH)
+        ctx.fill(Path(segRect), with: .color(gCol))
+        let edge = Path { p in
+            p.move(to: CGPoint(x: cursor, y: gY))
+            p.addLine(to: CGPoint(x: size.width, y: gY))
+        }
+        ctx.stroke(edge, with: .color(edgeCol), lineWidth: 2.5)
+    }
+
+    // Pit danger indicators: glowing red at pit edges
+    for gap in gaps {
+        let lx = max(gap.0 - 3, 0)
+        let rx = min(gap.1,     size.width - 3)
+        ctx.drawLayer { c in
+            c.opacity = 0.7
+            c.fill(Path(CGRect(x: lx, y: gY, width: 6, height: groundH / 2)),
+                   with: .color(Color(red: 1, green: 0.1, blue: 0.2)))
+            c.fill(Path(CGRect(x: rx, y: gY, width: 6, height: groundH / 2)),
+                   with: .color(Color(red: 1, green: 0.1, blue: 0.2)))
+        }
+    }
+
+    // Grid lines on all ground segments
     let gridSpacing: CGFloat = 40
     let offset = engine.scrollX.truncatingRemainder(dividingBy: gridSpacing)
     var gx = -offset
     while gx < size.width {
-        let linePath = Path { p in
-            p.move(to: CGPoint(x: gx, y: gY))
-            p.addLine(to: CGPoint(x: gx, y: gY + groundH))
-        }
-        ctx.drawLayer { c in
-            c.opacity = 0.25
-            c.stroke(linePath, with: .color(.cyan), lineWidth: 1)
+        // Only draw if not in a gap
+        let inGap = gaps.contains { gx >= $0.0 && gx <= $0.1 }
+        if !inGap {
+            let linePath = Path { p in
+                p.move(to: CGPoint(x: gx, y: gY))
+                p.addLine(to: CGPoint(x: gx, y: gY + groundH))
+            }
+            ctx.drawLayer { c in
+                c.opacity = 0.22
+                c.stroke(linePath, with: .color(.cyan), lineWidth: 1)
+            }
         }
         gx += gridSpacing
-    }
-
-    // Bright top edge glow
-    let edgePath = Path { p in
-        p.move(to: CGPoint(x: 0, y: gY))
-        p.addLine(to: CGPoint(x: size.width, y: gY))
-    }
-    ctx.stroke(edgePath, with: .color(Color(red: 0, green: 1, blue: 0.9)), lineWidth: 2.5)
-    // Soft glow below edge
-    ctx.drawLayer { c in
-        c.opacity = 0.25
-        c.fill(Path(CGRect(x: 0, y: gY, width: size.width, height: 8)),
-               with: .color(.cyan))
     }
 }
 
@@ -528,6 +618,47 @@ fileprivate func drawObstacles(ctx: GraphicsContext, size: CGSize, engine: GDEng
             }
             ctx.fill(Path(sr), with: .color(platCol))
             ctx.stroke(Path(sr), with: .color(.white.opacity(0.5)), lineWidth: 1.5)
+
+        case .ceilSpike:
+            // Inverted triangle (tip points down)
+            let col = Color(red: 1, green: 0.2, blue: 0.5)
+            let triPath = Path { p in
+                p.move(to: CGPoint(x: sr.minX,  y: sr.minY))  // top-left
+                p.addLine(to: CGPoint(x: sr.maxX,  y: sr.minY))  // top-right
+                p.addLine(to: CGPoint(x: sr.midX,  y: sr.maxY))  // bottom tip
+                p.closeSubpath()
+            }
+            ctx.drawLayer { c in
+                c.opacity = 0.35
+                let bigTri = Path { p in
+                    p.move(to: CGPoint(x: sr.minX - 3, y: sr.minY - 2))
+                    p.addLine(to: CGPoint(x: sr.maxX + 3, y: sr.minY - 2))
+                    p.addLine(to: CGPoint(x: sr.midX,     y: sr.maxY + 5))
+                    p.closeSubpath()
+                }
+                c.fill(bigTri, with: .color(col))
+            }
+            ctx.fill(triPath, with: .color(col))
+            ctx.stroke(triPath, with: .color(.white.opacity(0.55)), lineWidth: 1)
+
+        case .jumpPad:
+            // Yellow/green chevron shape on ground
+            let padCol = Color(red: 1, green: 0.85, blue: 0)
+            let chevron = Path { p in
+                p.move(to: CGPoint(x: sr.minX,       y: sr.maxY))
+                p.addLine(to: CGPoint(x: sr.midX,     y: sr.minY))
+                p.addLine(to: CGPoint(x: sr.maxX,     y: sr.maxY))
+                p.addLine(to: CGPoint(x: sr.maxX - 8, y: sr.maxY))
+                p.addLine(to: CGPoint(x: sr.midX,     y: sr.minY + 8))
+                p.addLine(to: CGPoint(x: sr.minX + 8, y: sr.maxY))
+                p.closeSubpath()
+            }
+            ctx.drawLayer { c in
+                c.opacity = 0.45
+                c.fill(Path(sr.insetBy(dx: -5, dy: -5)), with: .color(padCol))
+            }
+            ctx.fill(chevron, with: .color(padCol))
+            ctx.stroke(chevron, with: .color(.white.opacity(0.7)), lineWidth: 1)
         }
     }
 }
