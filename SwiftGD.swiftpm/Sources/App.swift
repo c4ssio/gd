@@ -810,6 +810,14 @@ struct OverlayView: View {
 }
 
 // ─── Root view ────────────────────────────────────────────────────────────────
+private let LEVEL_NAMES = ["","CLASSIC","PYRAMID","DIAMOND","CHECKERBOARD",
+                            "FORTRESS","HERRINGBONE","CROSS","GAUNTLET"]
+
+struct OverlayConfig {
+    let title: String; let subtitle: String; let button: String
+    let color: Color;  let action: () -> Void
+}
+
 struct ContentView: View {
     @StateObject private var model = GameModel()
 
@@ -818,6 +826,30 @@ struct ContentView: View {
         s.scaleMode = .aspectFit
         return s
     }()
+
+    private var overlayConfig: OverlayConfig? {
+        switch model.state {
+        case .idle:
+            return OverlayConfig(title: "BRICK BREAKER",
+                                 subtitle: "DRAG TO MOVE  ·  TAP TO LAUNCH",
+                                 button: "START GAME", color: .neonCyan) { startGame() }
+        case .dead:
+            return OverlayConfig(title: "GAME OVER",
+                                 subtitle: "SCORE: \(model.score)",
+                                 button: "PLAY AGAIN", color: .neonPink) { startGame() }
+        case .win:
+            return OverlayConfig(title: "YOU WIN!",
+                                 subtitle: "ALL 8 STAGES CLEARED  ·  SCORE: \(model.score)",
+                                 button: "PLAY AGAIN", color: .neonYellow) { startGame() }
+        case .levelClear:
+            let name = LEVEL_NAMES[min(model.level, LEVEL_NAMES.count-1)]
+            return OverlayConfig(title: "STAGE \(model.level) CLEAR!",
+                                 subtitle: "\(name) COMPLETE  ·  SCORE: \(model.score)",
+                                 button: "START STAGE \(model.level + 1)", color: .neonCyan) { nextLevel() }
+        case .playing:
+            return nil
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -841,13 +873,12 @@ struct ContentView: View {
                         .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.neonCyan.opacity(0.2), lineWidth: 1))
                         .shadow(color: .neonCyan.opacity(0.1), radius: 20)
 
-                    if model.state == .idle {
+                    if let ov = overlayConfig {
                         OverlayView(
-                            title: "BRICK BREAKER",
-                            subtitle: "DRAG TO MOVE  ·  TAP TO LAUNCH",
-                            buttonLabel: "START GAME",
-                            titleColor: .neonCyan
-                        ) { startGame() }
+                            title: ov.title, subtitle: ov.subtitle,
+                            buttonLabel: ov.button, titleColor: ov.color,
+                            onTap: ov.action
+                        )
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                     }
                 }
