@@ -11,9 +11,10 @@ fileprivate let groundH:    CGFloat = 50
 
 // MARK: - Types
 
-enum GDState { case menu, playing, dead, victory }
+enum GDState  { case menu, playing, dead, victory }
+enum GameMode { case cube, ship }
 
-enum ObstacleKind { case spike, block, platform, ceilSpike, jumpPad }
+enum ObstacleKind { case spike, block, platform, ceilSpike, jumpPad, portal }
 
 struct GDObstacle {
     var rect: CGRect
@@ -47,11 +48,13 @@ class GDEngine: ObservableObject {
     @Published var attempts: Int = 0
 
     // Player
-    var playerX: CGFloat = 120
-    var playerY: CGFloat = 0
-    var velY: CGFloat = 0
-    var onGround: Bool = false
+    var playerX:   CGFloat = 120
+    var playerY:   CGFloat = 0
+    var velY:      CGFloat = 0
+    var onGround:  Bool = false
     var cubeAngle: CGFloat = 0      // degrees, updated while scrolling
+    var mode:      GameMode = .cube
+    var holding:   Bool = false     // tap held (ship thrust)
 
     // World
     var scrollX: CGFloat = 0
@@ -145,6 +148,18 @@ class GDEngine: ObservableObject {
         func pit(_ start: CGFloat, _ end: CGFloat) {
             floorGaps.append((start: start, end: end))
         }
+        // Mode-change portal (tall rectangle, pass-through)
+        func portal(_ x: CGFloat) {
+            obstacles.append(GDObstacle(
+                rect: CGRect(x: x, y: 20, width: 24, height: gY - 20),
+                kind: .portal, colorIdx: 0))
+        }
+        // Tunnel wall for ship section (ceiling or floor block the passage)
+        func twall(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) {
+            obstacles.append(GDObstacle(
+                rect: CGRect(x: x, y: y, width: w, height: h),
+                kind: .block, colorIdx: 2))
+        }
 
         // ── Section 1: Tutorial — gentle single spikes ──────────── x 300–1150
         spike(300); spike(480); spike(660); spike(840); spike(1020)
@@ -165,34 +180,45 @@ class GDEngine: ObservableObject {
         plat(2820, gY - 80,  120)
         spike(2980); spike(3012)
 
-        // ── Section 4: Death pits ────────────────────────────────── x 3300–4100
+        // ── Ship section: portal → narrow tunnel → return portal ─── x 3100–3300
+        portal(3100)  // cube → ship
+        // Tunnel: ceiling blocks force player to fly at mid-height
+        let tunnelY  = gY - 110   // ceiling of tunnel
+        let gapH: CGFloat = 80    // fly-through gap
+        twall(3140, 0,       180, tunnelY)            // upper wall (ceiling)
+        twall(3140, tunnelY + gapH, 180, gY - (tunnelY + gapH))  // lower wall (floor plug)
+        twall(3240, 0,       180, tunnelY - 20)       // narrower 2nd tunnel ceiling
+        twall(3240, tunnelY + gapH - 20, 180, 60)    // lower wall
+        portal(3290)  // ship → cube
+
+        // ── Section 4: Death pits ────────────────────────────────── x 3500–4300
         // Floor gaps — player must jump over them
-        pit(3350, 3470)         // first pit
-        spike(3510)             // spike right after pit edge
-        pit(3700, 3820)         // second pit, wider
-        pad(3830)               // jump pad to clear next section
-        pit(4050, 4130)         // tight pit
+        pit(3550, 3670)         // first pit
+        spike(3710)             // spike right after pit edge
+        pit(3900, 4020)         // second pit, wider
+        pad(4030)               // jump pad to clear next section
+        pit(4250, 4330)         // tight pit
 
-        // ── Section 5: Block maze + ceiling spikes ───────────────── x 4300–5300
-        block(4300, gY - 60,  60,  60, 1)
-        spike(4410); spike(4442)
-        block(4550, gY - 90,  60,  90, 2)
-        cSpike(4570, 15)
-        spike(4660); spike(4692); spike(4724)
-        block(4800, gY - 60,  60,  60, 1)
-        spike(4910)
-        plat(5050, gY - 110, 120)
-        cSpike(5080, 25)
-        spike(5200); spike(5232)
+        // ── Section 5: Block maze + ceiling spikes ───────────────── x 4500–5500
+        block(4500, gY - 60,  60,  60, 1)
+        spike(4610); spike(4642)
+        block(4750, gY - 90,  60,  90, 2)
+        cSpike(4770, 15)
+        spike(4860); spike(4892); spike(4924)
+        block(5000, gY - 60,  60,  60, 1)
+        spike(5110)
+        plat(5250, gY - 110, 120)
+        cSpike(5280, 25)
+        spike(5400); spike(5432)
 
-        // ── Section 6: Final gauntlet ────────────────────────────── x 5500–6300
+        // ── Section 6: Final gauntlet ────────────────────────────── x 5700–6400
         for i in 0..<6 {
-            let bx = 5500 + CGFloat(i) * 130
+            let bx = 5700 + CGFloat(i) * 130
             spike(bx, i % 3)
             if i % 2 == 0 { spike(bx + 32, (i+1) % 3) }
         }
-        pit(6100, 6200)
-        spike(6230); spike(6262); spike(6294)
+        pit(6300, 6400)
+        spike(6430); spike(6462); spike(6494)
         pad(6380)
     }
 
@@ -204,15 +230,26 @@ class GDEngine: ObservableObject {
             state = .playing
             attempts = 1
         case .playing:
-            if onGround {
-                velY = jumpVel
-                onGround = false
+            if mode == .cube {
+                if onGround {
+                    velY = jumpVel
+                    onGround = false
+                }
             }
+            // Ship thrust is handled via holding flag
         case .dead:
             break  // auto-restart via deathPause
         case .victory:
             restartGame()
         }
+    }
+
+    func touchDown() {
+        if state == .playing { holding = true }
+    }
+
+    func touchUp() {
+        holding = false
     }
 
     // MARK: Game loop
@@ -251,7 +288,14 @@ class GDEngine: ObservableObject {
         }
 
         // --- Physics ---
-        velY += gravity
+        if mode == .ship {
+            // Ship: hold = thrust up, release = fall
+            let thrust: CGFloat = holding ? -1.1 : 0.0
+            velY += gravity * 0.55 + thrust
+            velY = max(-9, min(9, velY))  // clamp ship speed
+        } else {
+            velY += gravity
+        }
         playerY += velY
         scrollX += scrollSpd
         cubeAngle = scrollX * 0.09  // slow rotation as level scrolls
@@ -290,6 +334,16 @@ class GDEngine: ObservableObject {
             switch obs.kind {
             case .spike, .ceilSpike:
                 die(size: size); return
+
+            case .portal:
+                // Switch modes
+                if mode == .cube {
+                    mode = .ship
+                    velY = min(velY, -2)  // slight upward nudge on entry
+                } else {
+                    mode = .cube
+                }
+                continue  // don't die or land, just pass through
 
             case .jumpPad:
                 // Bounce — only trigger if coming down onto it
@@ -352,6 +406,8 @@ class GDEngine: ObservableObject {
         scrollX = 0
         progress = 0
         onGround = false
+        mode = .cube
+        holding = false
         particles = []
         deathFlash = 0
         shakeTimer = 0
@@ -402,7 +458,15 @@ struct ContentView: View {
                 }
             }
             .contentShape(Rectangle())
-            .onTapGesture { engine.tap() }
+            // Tap = cube jump; hold = ship thrust
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        engine.touchDown()
+                        engine.tap()  // also triggers cube jump on first touch
+                    }
+                    .onEnded { _ in engine.touchUp() }
+            )
         }
         .background(Color.black)
         .ignoresSafeArea()
@@ -422,7 +486,11 @@ fileprivate func renderFrame(ctx: GraphicsContext, size: CGSize, engine: GDEngin
         drawGround(ctx: wc, size: size, engine: engine)
         drawObstacles(ctx: wc, size: size, engine: engine)
         if engine.state == .playing || engine.state == .menu {
-            drawPlayer(ctx: wc, engine: engine)
+            if engine.mode == .ship {
+                drawShip(ctx: wc, engine: engine)
+            } else {
+                drawPlayer(ctx: wc, engine: engine)
+            }
         }
         drawParticles(ctx: wc, engine: engine)
     }
@@ -641,6 +709,28 @@ fileprivate func drawObstacles(ctx: GraphicsContext, size: CGSize, engine: GDEng
             ctx.fill(triPath, with: .color(col))
             ctx.stroke(triPath, with: .color(.white.opacity(0.55)), lineWidth: 1)
 
+        case .portal:
+            // Tall vertical ring — glowing purple/orange depending on destination
+            let portalCol = Color(red: 0.7, green: 0.1, blue: 1)   // purple = ship portal
+            ctx.drawLayer { c in
+                c.opacity = 0.25
+                c.fill(Path(sr), with: .color(portalCol))
+            }
+            ctx.stroke(Path(sr), with: .color(portalCol), lineWidth: 3)
+            // Chevron arrows inside portal hinting direction
+            for i in 0..<3 {
+                let ay = sr.minY + sr.height * (0.3 + CGFloat(i) * 0.2)
+                let arrPath = Path { p in
+                    p.move(to: CGPoint(x: sr.minX + 4,  y: ay))
+                    p.addLine(to: CGPoint(x: sr.midX,    y: ay - 8))
+                    p.addLine(to: CGPoint(x: sr.maxX - 4, y: ay))
+                }
+                ctx.drawLayer { c in
+                    c.opacity = 0.8
+                    c.stroke(arrPath, with: .color(.white), lineWidth: 1.5)
+                }
+            }
+
         case .jumpPad:
             // Yellow/green chevron shape on ground
             let padCol = Color(red: 1, green: 0.85, blue: 0)
@@ -709,6 +799,62 @@ fileprivate func drawPlayer(ctx: GraphicsContext, engine: GDEngine) {
     }
 }
 
+fileprivate func drawShip(ctx: GraphicsContext, engine: GDEngine) {
+    let cx = engine.playerX + playerW / 2
+    let cy = engine.playerY + playerH / 2
+    // Ship tilts slightly based on vertical velocity
+    let tilt = max(-25, min(25, engine.velY * 2.0))
+    let angleRad = tilt * CGFloat.pi / 180
+
+    ctx.drawLayer { c in
+        c.concatenate(CGAffineTransform(translationX: cx, y: cy))
+        c.concatenate(CGAffineTransform(rotationAngle: angleRad))
+        c.concatenate(CGAffineTransform(translationX: -cx, y: -cy))
+
+        let r = CGRect(x: engine.playerX, y: engine.playerY, width: playerW, height: playerH)
+        // Ship body: horizontal diamond / arrow
+        let shipPath = Path { p in
+            p.move(to: CGPoint(x: r.maxX,      y: r.midY))        // nose
+            p.addLine(to: CGPoint(x: r.minX + 6, y: r.minY + 6))  // top-left
+            p.addLine(to: CGPoint(x: r.minX,     y: r.midY))      // tail
+            p.addLine(to: CGPoint(x: r.minX + 6, y: r.maxY - 6))  // bottom-left
+            p.closeSubpath()
+        }
+        let shipCol = Color(red: 0.2, green: 0.8, blue: 1)
+        // Outer glow
+        c.drawLayer { g in
+            g.opacity = 0.4
+            g.fill(Path(r.insetBy(dx: -6, dy: -6)), with: .color(shipCol))
+        }
+        c.fill(shipPath, with: .color(shipCol))
+        // Highlight
+        c.drawLayer { g in
+            g.opacity = 0.5
+            let hiPath = Path { p in
+                p.move(to: CGPoint(x: r.maxX,       y: r.midY))
+                p.addLine(to: CGPoint(x: r.minX + 6, y: r.minY + 6))
+                p.addLine(to: CGPoint(x: r.midX,     y: r.midY))
+            }
+            g.stroke(hiPath, with: .color(.white), lineWidth: 2)
+        }
+        c.stroke(shipPath, with: .color(.white.opacity(0.85)), lineWidth: 1.5)
+
+        // Thrust flame when holding
+        if engine.holding {
+            c.drawLayer { g in
+                g.opacity = CGFloat.random(in: 0.6...1.0)
+                let flame = Path { p in
+                    p.move(to: CGPoint(x: r.minX,     y: r.midY - 5))
+                    p.addLine(to: CGPoint(x: r.minX - CGFloat.random(in: 10...18), y: r.midY))
+                    p.addLine(to: CGPoint(x: r.minX,     y: r.midY + 5))
+                    p.closeSubpath()
+                }
+                g.fill(flame, with: .color(Color(red: 1, green: 0.6, blue: 0)))
+            }
+        }
+    }
+}
+
 fileprivate func drawParticles(ctx: GraphicsContext, engine: GDEngine) {
     for p in engine.particles {
         let alpha = p.life / p.maxLife
@@ -758,6 +904,15 @@ fileprivate func drawHUD(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
         .font(.system(size: 13, weight: .semibold, design: .monospaced))
         .foregroundColor(.white.opacity(0.7))
     ctx.draw(attText, at: CGPoint(x: 20, y: 32), anchor: .topLeading)
+
+    // Mode indicator
+    let modeLabel = engine.mode == .ship ? "✈ SHIP" : "▣ CUBE"
+    let modeColor: Color = engine.mode == .ship ?
+        Color(red: 0.2, green: 0.8, blue: 1) : Color(red: 0.1, green: 1, blue: 0.5)
+    let modeText = Text(modeLabel)
+        .font(.system(size: 12, weight: .bold, design: .monospaced))
+        .foregroundColor(modeColor)
+    ctx.draw(modeText, at: CGPoint(x: size.width / 2, y: 32), anchor: .top)
 
     // Percent
     let pct = Int(engine.progress * 100)
