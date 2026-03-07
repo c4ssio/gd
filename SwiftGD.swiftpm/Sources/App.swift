@@ -208,9 +208,11 @@ class BrickBreakerScene: SKScene {
     private var dragMoved = false
 
     // callbacks
-    var onTap:      (() -> Void)?
-    var onLoseLife: (() -> Void)?
-    var onLevelClear: (() -> Void)?
+    var onTap:           (() -> Void)?
+    var onLoseLife:      (() -> Void)?
+    var onLevelClear:    (() -> Void)?
+    // (x, y, colorIdx, col) — used by particles step
+    var onBrickDestroyed: ((CGFloat, CGFloat, Int, Int) -> Void)?
 
     // ball state
     private(set) var balls: [BallState] = []
@@ -375,9 +377,45 @@ class BrickBreakerScene: SKScene {
                 b.vx = (b.vx/spd)*tgt; b.vy = (b.vy/spd)*tgt
             }
 
+            // Brick collisions (one brick per ball per frame, matching HTML)
+            checkBrickCollision(ballIdx: i, ball: &b)
+
             b.node.position = CGPoint(x: b.x, y: b.y)
             balls[i] = b
             i -= 1
+        }
+    }
+
+    private func checkBrickCollision(ballIdx: Int, ball: inout BallState) {
+        for (node, live) in brickLive {
+            let bx = node.position.x - BRICK_W / 2
+            let by = node.position.y - BRICK_H / 2
+
+            guard ball.x + BALL_R > bx && ball.x - BALL_R < bx + BRICK_W &&
+                  ball.y + BALL_R > by && ball.y - BALL_R < by + BRICK_H else { continue }
+
+            // Bounce axis — smaller overlap axis wins
+            let ox = min(ball.x + BALL_R - bx, bx + BRICK_W - (ball.x - BALL_R))
+            let oy = min(ball.y + BALL_R - by, by + BRICK_H - (ball.y - BALL_R))
+            if ox < oy { ball.vx *= -1 } else { ball.vy *= -1 }
+
+            // Capture live data before damage removes it
+            let colorIdx = live.colorIdx
+            let pts = BRICK_COLORS[colorIdx % BRICK_COLORS.count].pts
+            let brickCenterX = node.position.x
+            let brickCenterY = node.position.y
+            let col = live.col
+
+            let destroyed = damageBrick(node)
+            if destroyed {
+                let lvl = model?.level ?? 1
+                model?.score += pts * lvl
+                onBrickDestroyed?(brickCenterX, brickCenterY, colorIdx, col)
+                // Check level clear
+                if allBricksCleared { onLevelClear?() }
+            }
+            balls[ballIdx] = ball
+            break  // one brick per ball per frame
         }
     }
 
@@ -573,7 +611,8 @@ struct ContentView: View {
                 guard model.state == .playing else { return }
                 scene.launchBall()
             }
-            scene.onLoseLife = { loseLife() }
+            scene.onLoseLife    = { loseLife() }
+            scene.onLevelClear  = { levelClear() }
         }
     }
 
@@ -595,6 +634,22 @@ struct ContentView: View {
             scene.resetPaddle()
             scene.resetBalls()
         }
+    }
+
+    private func levelClear() {
+        if model.level >= 8 {
+            model.state = .win
+        } else {
+            model.state = .levelClear
+        }
+    }
+
+    private func nextLevel() {
+        model.level += 1
+        model.state  = .playing
+        scene.resetPaddle()
+        scene.buildBricks()
+        scene.resetBalls()
     }
 }
 
