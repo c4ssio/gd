@@ -30,6 +30,16 @@ struct GDParticle {
     var size: CGFloat
 }
 
+// MARK: - Star (background parallax)
+
+struct GDStar {
+    var worldX: CGFloat   // position in a virtual world wider than screen
+    var y: CGFloat
+    var radius: CGFloat
+    var brightness: CGFloat
+    var parallax: CGFloat  // 0..1, lower = further back = slower
+}
+
 // MARK: - Engine
 
 class GDEngine: ObservableObject {
@@ -41,6 +51,7 @@ class GDEngine: ObservableObject {
     var playerY: CGFloat = 0
     var velY: CGFloat = 0
     var onGround: Bool = false
+    var cubeAngle: CGFloat = 0      // degrees, updated while scrolling
 
     // World
     var scrollX: CGFloat = 0
@@ -49,6 +60,12 @@ class GDEngine: ObservableObject {
     // Obstacles & particles
     var obstacles: [GDObstacle] = []
     var particles: [GDParticle] = []
+    var stars: [GDStar] = []
+
+    // Screen shake
+    var shakeTimer: CGFloat = 0
+    var shakeX: CGFloat = 0
+    var shakeY: CGFloat = 0
 
     // Timers
     var deathFlash: CGFloat = 0
@@ -68,6 +85,22 @@ class GDEngine: ObservableObject {
         groundY = size.height - groundH
         playerY = groundY - playerH
         buildLevel()
+        buildStars(size: size)
+    }
+
+    func buildStars(size: CGSize) {
+        stars = []
+        let worldW = size.width * 4  // tile across 4 screen-widths
+        let skyH   = size.height * 0.75
+        for i in 0..<90 {
+            let seed = CGFloat(i * 6791 + 3)
+            let wx   = seed.truncatingRemainder(dividingBy: worldW)
+            let y    = (seed * 1.7).truncatingRemainder(dividingBy: skyH) + 4
+            let r    = CGFloat.random(in: 0.8...2.4)
+            let br   = CGFloat.random(in: 0.3...1.0)
+            let par  = CGFloat.random(in: 0.05...0.25)
+            stars.append(GDStar(worldX: wx, y: y, radius: r, brightness: br, parallax: par))
+        }
     }
 
     func buildLevel() {
@@ -172,10 +205,21 @@ class GDEngine: ObservableObject {
         case .playing: break
         }
 
+        // Screen shake decay
+        if shakeTimer > 0 {
+            shakeTimer -= dt
+            let t = shakeTimer * 45
+            shakeX = sin(t) * 7 * (shakeTimer / 0.35)
+            shakeY = cos(t * 1.3) * 5 * (shakeTimer / 0.35)
+        } else {
+            shakeX = 0; shakeY = 0
+        }
+
         // --- Physics ---
         velY += gravity
         playerY += velY
         scrollX += scrollSpd
+        cubeAngle = scrollX * 0.09  // slow rotation as level scrolls
         progress = min(1, scrollX / levelLen)
 
         // Ground
@@ -243,9 +287,10 @@ class GDEngine: ObservableObject {
         state = .dead
         deathFlash = 1.0
         deathPause = 1.2
+        shakeTimer = 0.35
         attempts += 1
         spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH/2),
-                       count: 30, speed: 2...9, life: 1.0,
+                       count: 40, speed: 2...11, life: 1.0,
                        colors: [.cyan, .green, Color(red:0,green:1,blue:0.5), .yellow, .white])
     }
 
@@ -313,113 +358,224 @@ struct ContentView: View {
 // MARK: - Renderer
 
 fileprivate func renderFrame(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
-    // Background
+    // Synthwave background
     drawBackground(ctx: ctx, size: size)
+    drawStars(ctx: ctx, size: size, engine: engine)
 
-    // Ground
-    let gRect = CGRect(x: 0, y: engine.groundY, width: size.width, height: groundH)
-    ctx.fill(Path(gRect), with: .color(Color(red: 0.07, green: 0.35, blue: 0.45)))
-    // Ground top edge glow line
-    let edgePath = Path { p in
-        p.move(to: CGPoint(x: 0, y: engine.groundY))
-        p.addLine(to: CGPoint(x: size.width, y: engine.groundY))
-    }
-    ctx.stroke(edgePath, with: .color(.cyan.opacity(0.8)), lineWidth: 2)
-
-    // Obstacles
-    drawObstacles(ctx: ctx, size: size, engine: engine)
-
-    // Player (only when alive/playing)
-    if engine.state == .playing || engine.state == .menu {
-        drawPlayer(ctx: ctx, engine: engine)
+    // World content (apply screen shake offset via drawLayer)
+    ctx.drawLayer { wc in
+        wc.concatenate(CGAffineTransform(translationX: engine.shakeX, y: engine.shakeY))
+        drawGround(ctx: wc, size: size, engine: engine)
+        drawObstacles(ctx: wc, size: size, engine: engine)
+        if engine.state == .playing || engine.state == .menu {
+            drawPlayer(ctx: wc, engine: engine)
+        }
+        drawParticles(ctx: wc, engine: engine)
     }
 
-    // Particles
-    drawParticles(ctx: ctx, engine: engine)
-
-    // Death flash
+    // Death flash (no shake — full screen)
     if engine.deathFlash > 0 {
         ctx.drawLayer { c in
-            c.opacity = Double(engine.deathFlash * 0.6)
+            c.opacity = Double(engine.deathFlash * 0.55)
             c.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.white))
         }
     }
 
-    // UI
+    // UI always on top, no shake
     drawUI(ctx: ctx, size: size, engine: engine)
 }
 
 fileprivate func drawBackground(ctx: GraphicsContext, size: CGSize) {
-    let bg = Path(CGRect(origin: .zero, size: size))
-    ctx.fill(bg, with: .color(Color(red: 0.04, green: 0.04, blue: 0.12)))
+    // Deep synthwave gradient: top dark-navy → bottom deep-purple
+    let stops: [Gradient.Stop] = [
+        .init(color: Color(red: 0.02, green: 0.02, blue: 0.10), location: 0),
+        .init(color: Color(red: 0.06, green: 0.02, blue: 0.16), location: 0.55),
+        .init(color: Color(red: 0.10, green: 0.03, blue: 0.22), location: 1),
+    ]
+    ctx.fill(Path(CGRect(origin: .zero, size: size)),
+             with: .linearGradient(Gradient(stops: stops),
+                                   startPoint: CGPoint(x: size.width/2, y: 0),
+                                   endPoint: CGPoint(x: size.width/2, y: size.height)))
+
+    // Horizon glow band
+    let hY = size.height * 0.62
+    ctx.drawLayer { c in
+        c.opacity = 0.18
+        let glowRect = CGRect(x: 0, y: hY - 40, width: size.width, height: 80)
+        c.fill(Path(glowRect), with: .color(Color(red: 0, green: 0.8, blue: 1)))
+    }
+}
+
+fileprivate func drawStars(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
+    let worldW = size.width * 4
+    for star in engine.stars {
+        // Parallax: slow stars move less than world scroll
+        let screenX = star.worldX - engine.scrollX * star.parallax
+        // Wrap to screen
+        let wrapped = screenX.truncatingRemainder(dividingBy: worldW)
+        let fx = wrapped < 0 ? wrapped + worldW : wrapped
+        guard fx >= 0 && fx < size.width else { continue }
+
+        let pr = CGRect(x: fx - star.radius, y: star.y - star.radius,
+                        width: star.radius * 2, height: star.radius * 2)
+        ctx.drawLayer { c in
+            c.opacity = Double(star.brightness)
+            c.fill(Path(ellipseIn: pr), with: .color(.white))
+        }
+    }
+}
+
+fileprivate func drawGround(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
+    let gY = engine.groundY
+    // Ground base
+    ctx.fill(Path(CGRect(x: 0, y: gY, width: size.width, height: groundH)),
+             with: .color(Color(red: 0.03, green: 0.18, blue: 0.25)))
+
+    // Vertical grid lines on ground (tiled, scroll with world)
+    let gridSpacing: CGFloat = 40
+    let offset = engine.scrollX.truncatingRemainder(dividingBy: gridSpacing)
+    var gx = -offset
+    while gx < size.width {
+        let linePath = Path { p in
+            p.move(to: CGPoint(x: gx, y: gY))
+            p.addLine(to: CGPoint(x: gx, y: gY + groundH))
+        }
+        ctx.drawLayer { c in
+            c.opacity = 0.25
+            c.stroke(linePath, with: .color(.cyan), lineWidth: 1)
+        }
+        gx += gridSpacing
+    }
+
+    // Bright top edge glow
+    let edgePath = Path { p in
+        p.move(to: CGPoint(x: 0, y: gY))
+        p.addLine(to: CGPoint(x: size.width, y: gY))
+    }
+    ctx.stroke(edgePath, with: .color(Color(red: 0, green: 1, blue: 0.9)), lineWidth: 2.5)
+    // Soft glow below edge
+    ctx.drawLayer { c in
+        c.opacity = 0.25
+        c.fill(Path(CGRect(x: 0, y: gY, width: size.width, height: 8)),
+               with: .color(.cyan))
+    }
 }
 
 fileprivate let spikeColors: [Color] = [
-    Color(red: 0, green: 1, blue: 0.9),
-    Color(red: 1, green: 0.3, blue: 0.6),
-    Color(red: 1, green: 0.8, blue: 0),
+    Color(red: 0,   green: 1,   blue: 0.9),   // cyan
+    Color(red: 1,   green: 0.2, blue: 0.5),   // hot pink
+    Color(red: 1,   green: 0.75,blue: 0),      // amber
 ]
 fileprivate let blockColors: [Color] = [
-    Color(red: 0.2, green: 0.6, blue: 1),
-    Color(red: 0.5, green: 0.1, blue: 0.8),
-    Color(red: 0,   green: 0.8, blue: 0.5),
+    Color(red: 0.15,green: 0.5, blue: 1),      // electric blue
+    Color(red: 0.55,green: 0.1, blue: 0.9),    // deep violet
+    Color(red: 0,   green: 0.75,blue: 0.45),   // teal
 ]
 
 fileprivate func drawObstacles(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
     for obs in engine.obstacles {
         let sx = obs.rect.minX - engine.scrollX
-        guard sx > -obs.rect.width && sx < size.width else { continue }
+        guard sx > -obs.rect.width - 20 && sx < size.width + 20 else { continue }
 
         let sr = CGRect(x: sx, y: obs.rect.minY, width: obs.rect.width, height: obs.rect.height)
 
         switch obs.kind {
         case .spike:
-            // Draw triangle
+            let col = spikeColors[obs.colorIdx % spikeColors.count]
             let triPath = Path { p in
                 p.move(to: CGPoint(x: sr.minX, y: sr.maxY))
                 p.addLine(to: CGPoint(x: sr.midX, y: sr.minY))
                 p.addLine(to: CGPoint(x: sr.maxX, y: sr.maxY))
                 p.closeSubpath()
             }
-            let col = spikeColors[obs.colorIdx % spikeColors.count]
+            // Outer glow
+            ctx.drawLayer { c in
+                c.opacity = 0.35
+                let bigTri = Path { p in
+                    p.move(to: CGPoint(x: sr.minX - 3, y: sr.maxY + 2))
+                    p.addLine(to: CGPoint(x: sr.midX,  y: sr.minY - 5))
+                    p.addLine(to: CGPoint(x: sr.maxX + 3, y: sr.maxY + 2))
+                    p.closeSubpath()
+                }
+                c.fill(bigTri, with: .color(col))
+            }
             ctx.fill(triPath, with: .color(col))
-            ctx.stroke(triPath, with: .color(.white.opacity(0.4)), lineWidth: 1)
+            // Bright inner highlight edge
+            ctx.stroke(triPath, with: .color(.white.opacity(0.55)), lineWidth: 1)
 
         case .block:
             let col = blockColors[obs.colorIdx % blockColors.count]
+            // Glow halo
+            ctx.drawLayer { c in
+                c.opacity = 0.3
+                c.fill(Path(sr.insetBy(dx: -4, dy: -4)), with: .color(col))
+            }
             ctx.fill(Path(sr), with: .color(col))
-            ctx.stroke(Path(sr), with: .color(.white.opacity(0.3)), lineWidth: 1)
+            // Diagonal inner highlight
+            let diagPath = Path { p in
+                p.move(to: CGPoint(x: sr.minX + 6, y: sr.minY + 6))
+                p.addLine(to: CGPoint(x: sr.maxX - 6, y: sr.minY + 6))
+                p.addLine(to: CGPoint(x: sr.maxX - 6, y: sr.maxY - 6))
+            }
+            ctx.stroke(diagPath, with: .color(.white.opacity(0.25)), lineWidth: 1)
+            ctx.stroke(Path(sr), with: .color(.white.opacity(0.5)), lineWidth: 1.5)
 
         case .platform:
-            ctx.fill(Path(sr), with: .color(Color(red: 0.1, green: 0.7, blue: 0.4)))
-            ctx.stroke(Path(sr), with: .color(.white.opacity(0.4)), lineWidth: 1)
+            let platCol = Color(red: 0.05, green: 0.65, blue: 0.45)
+            ctx.drawLayer { c in
+                c.opacity = 0.3
+                c.fill(Path(sr.insetBy(dx: -3, dy: -3)), with: .color(platCol))
+            }
+            ctx.fill(Path(sr), with: .color(platCol))
+            ctx.stroke(Path(sr), with: .color(.white.opacity(0.5)), lineWidth: 1.5)
         }
     }
 }
 
 fileprivate func drawPlayer(ctx: GraphicsContext, engine: GDEngine) {
-    let r = CGRect(x: engine.playerX, y: engine.playerY, width: playerW, height: playerH)
+    let cx = engine.playerX + playerW / 2
+    let cy = engine.playerY + playerH / 2
+    let angleRad = engine.cubeAngle * CGFloat.pi / 180
 
-    // Cube fill
-    ctx.fill(Path(r), with: .color(Color(red: 0.1, green: 0.9, blue: 0.4)))
+    // Draw cube in a rotated layer
+    ctx.drawLayer { c in
+        // Rotate around cube centre
+        c.concatenate(CGAffineTransform(translationX: cx, y: cy))
+        c.concatenate(CGAffineTransform(rotationAngle: angleRad))
+        c.concatenate(CGAffineTransform(translationX: -cx, y: -cy))
 
-    // Inner detail lines
-    let inset: CGFloat = 6
-    let innerPath = Path { p in
+        let r = CGRect(x: engine.playerX, y: engine.playerY, width: playerW, height: playerH)
+
+        // Outer glow (larger box, low opacity)
+        c.drawLayer { g in
+            g.opacity = 0.4
+            g.fill(Path(r.insetBy(dx: -6, dy: -6)),
+                   with: .color(Color(red: 0.1, green: 1, blue: 0.5)))
+        }
+
+        // Cube body — lime-green gradient feel via two overlapping fills
+        c.fill(Path(r), with: .color(Color(red: 0.05, green: 0.75, blue: 0.35)))
+        c.drawLayer { g in
+            g.opacity = 0.55
+            let topHalf = CGRect(x: r.minX, y: r.minY, width: r.width, height: r.height * 0.5)
+            g.fill(Path(topHalf), with: .color(Color(red: 0.2, green: 1, blue: 0.55)))
+        }
+
+        // Inner square detail
+        let inset: CGFloat = 6
         let ir = r.insetBy(dx: inset, dy: inset)
-        p.addRect(ir)
-    }
-    ctx.stroke(innerPath, with: .color(.white.opacity(0.5)), lineWidth: 1.5)
+        c.stroke(Path(ir), with: .color(.white.opacity(0.55)), lineWidth: 1.5)
 
-    // Diagonal cross detail
-    let diagPath = Path { p in
-        p.move(to: CGPoint(x: r.minX + inset, y: r.minY + inset))
-        p.addLine(to: CGPoint(x: r.maxX - inset, y: r.maxY - inset))
-    }
-    ctx.stroke(diagPath, with: .color(.white.opacity(0.3)), lineWidth: 1)
+        // Diagonal line detail
+        let diagPath = Path { p in
+            p.move(to: CGPoint(x: r.minX + inset, y: r.minY + inset))
+            p.addLine(to: CGPoint(x: r.maxX - inset, y: r.maxY - inset))
+        }
+        c.stroke(diagPath, with: .color(.white.opacity(0.3)), lineWidth: 1)
 
-    // Outline
-    ctx.stroke(Path(r), with: .color(.white.opacity(0.8)), lineWidth: 1.5)
+        // Bright white outline
+        c.stroke(Path(r), with: .color(.white.opacity(0.85)), lineWidth: 1.5)
+    }
 }
 
 fileprivate func drawParticles(ctx: GraphicsContext, engine: GDEngine) {
