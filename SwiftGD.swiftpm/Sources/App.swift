@@ -285,10 +285,114 @@ class BrickBreakerScene: SKScene {
     // game-loop timing
     private var lastUpdateTime: TimeInterval = 0
 
+    // polish nodes
+    private var hintLabel:      SKLabelNode!
+    private var levelNameLabel: SKLabelNode!
+    private var wideBarFg:      SKSpriteNode!
+    private var speedBarFg:     SKSpriteNode!
+    private var speedBorder:    SKShapeNode!
+
     override func didMove(to view: SKView) {
         backgroundColor = .bgCanvas
         drawGrid()
         buildPaddle()
+        buildPolishNodes()
+    }
+
+    // ── Polish nodes ─────────────────────────────────────────────────────────
+    private func buildPolishNodes() {
+        // Power-up timer bars (bottom 4 px of canvas)
+        func makeBar(color: SKColor) -> SKSpriteNode {
+            let n = SKSpriteNode(color: color, size: CGSize(width: GW, height: 4))
+            n.anchorPoint = CGPoint(x: 0, y: 0)
+            n.position    = CGPoint(x: 0, y: 0)
+            n.zPosition   = 10
+            return n
+        }
+        // Background track (dim)
+        let wideBgBar  = makeBar(color: SKColor(red:0.67, green:0, blue:1, alpha:0.25))
+        let speedBgBar = makeBar(color: SKColor(red:0, green:1, blue:0.53, alpha:0.25))
+        wideBgBar.isHidden = true; speedBgBar.isHidden = true
+        addChild(wideBgBar); addChild(speedBgBar)
+
+        wideBarFg  = makeBar(color: SKColor(red:0.80, green:0.27, blue:1, alpha:1))
+        speedBarFg = makeBar(color: SKColor(red:0, green:1, blue:0.53, alpha:1))
+        wideBarFg.isHidden  = true
+        speedBarFg.isHidden = true
+        // Store bg refs so we can show/hide together
+        wideBarFg.userData  = ["bg": wideBgBar]
+        speedBarFg.userData = ["bg": speedBgBar]
+        addChild(wideBarFg); addChild(speedBarFg)
+
+        // Speed-boost screen border flash
+        speedBorder = SKShapeNode(rect: CGRect(x: 4, y: 4, width: GW-8, height: GH-8))
+        speedBorder.fillColor   = .clear
+        speedBorder.strokeColor = SKColor(red:0, green:1, blue:0.53, alpha:0.18)
+        speedBorder.lineWidth   = 8
+        speedBorder.zPosition   = 11
+        speedBorder.isHidden    = true
+        addChild(speedBorder)
+
+        // Launch hint — "TAP TO LAUNCH" above ball/paddle
+        hintLabel = SKLabelNode(text: "TAP TO LAUNCH")
+        hintLabel.fontName               = "Helvetica-Bold"
+        hintLabel.fontSize               = 11
+        hintLabel.fontColor              = .white
+        hintLabel.horizontalAlignmentMode = .center
+        hintLabel.verticalAlignmentMode  = .center
+        hintLabel.position   = CGPoint(x: GW/2, y: PADDLE_Y_CENTER + PADDLE_H/2 + BALL_R + 18)
+        hintLabel.zPosition  = 9
+        hintLabel.isHidden   = true
+        addChild(hintLabel)
+        hintLabel.run(SKAction.repeatForever(SKAction.sequence([
+            SKAction.fadeAlpha(to: 0.8, duration: 0.4),
+            SKAction.fadeAlpha(to: 0.3, duration: 0.4)
+        ])))
+
+        // Level name watermark — bottom-right
+        levelNameLabel = SKLabelNode(text: "")
+        levelNameLabel.fontName               = "Helvetica-Bold"
+        levelNameLabel.fontSize               = 9
+        levelNameLabel.fontColor              = SKColor.white.withAlphaComponent(0.22)
+        levelNameLabel.horizontalAlignmentMode = .right
+        levelNameLabel.verticalAlignmentMode  = .bottom
+        levelNameLabel.position   = CGPoint(x: GW - 6, y: 6)
+        levelNameLabel.zPosition  = 9
+        addChild(levelNameLabel)
+    }
+
+    func updatePolish(currentTime: TimeInterval) {
+        // Launch hint visibility
+        let showHint = (model?.state == .playing) && (balls.first?.launched == false)
+        hintLabel.isHidden = !showHint
+
+        // Wide timer bar
+        let wideOn = wideTimer > 0
+        wideBarFg.isHidden = !wideOn
+        (wideBarFg.userData?["bg"] as? SKNode)?.isHidden = !wideOn
+        if wideOn {
+            wideBarFg.xScale = CGFloat(wideTimer / 600)
+        }
+
+        // Speed timer bar
+        let speedOn = speedTimer > 0
+        speedBarFg.isHidden = !speedOn
+        (speedBarFg.userData?["bg"] as? SKNode)?.isHidden = !speedOn
+        if speedOn {
+            speedBarFg.xScale = CGFloat(speedTimer / 480)
+        }
+
+        // Speed border flash (alternates every ~10 frames at 60fps)
+        if speedOn {
+            let flash = Int(currentTime * 60) % 20 < 10
+            speedBorder.isHidden = !flash
+        } else {
+            speedBorder.isHidden = true
+        }
+    }
+
+    func updateLevelName() {
+        levelNameLabel?.text = LEVEL_NAMES[min(model?.level ?? 1, LEVEL_NAMES.count-1)]
     }
 
     // ── Grid ────────────────────────────────────────────────────────────────
@@ -403,6 +507,7 @@ class BrickBreakerScene: SKScene {
             updatePowerups(dt: dt)
         }
         updateParticles(dt: dt)  // tick particles during levelClear too
+        updatePolish(currentTime: currentTime)
     }
 
     private func updateBalls(dt: CGFloat) {
@@ -676,6 +781,7 @@ class BrickBreakerScene: SKScene {
     // ── Build bricks ─────────────────────────────────────────────────────────
     func buildBricks() {
         guard let lvl = model?.level else { return }
+        updateLevelName()
         // Remove existing bricks
         brickLive.keys.forEach { $0.removeFromParent() }
         brickLive.removeAll()
