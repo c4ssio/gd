@@ -36,6 +36,11 @@ let PADDLE_Y_CENTER: CGFloat = 31
 let BALL_R: CGFloat    = 7
 let BASE_SPEED: CGFloat = 4.5
 
+// Power-ups
+let PU_W: CGFloat = 28
+let PU_H: CGFloat = 18
+let PU_SPEED: CGFloat = 1.8
+
 let EXTRA_BALL_COLORS: [SKColor] = [
     SKColor(red:0,    green:0.96, blue:1,    alpha:1), // cyan
     SKColor(red:1,    green:0,    blue:0.50, alpha:1), // pink
@@ -144,6 +149,51 @@ class GameModel: ObservableObject {
     @Published var state: GameState = .idle
 }
 
+// ─── Power-up types ───────────────────────────────────────────────────────────
+enum PowerupType: CaseIterable {
+    case laser, triball, wide, speed
+
+    var label: String {
+        switch self { case .laser: "ZAP"; case .triball: "×3"; case .wide: "↔"; case .speed: "▶▶" }
+    }
+    var fillColor: SKColor {
+        switch self {
+        case .laser:   SKColor(red:1,    green:0.27, blue:0,    alpha:1)
+        case .triball: SKColor(red:0,    green:0.40, blue:1,    alpha:1)
+        case .wide:    SKColor(red:0.67, green:0,    blue:1,    alpha:1)
+        case .speed:   SKColor(red:0,    green:1,    blue:0.53, alpha:1)
+        }
+    }
+}
+
+struct PowerupState {
+    var x, y: CGFloat   // center in scene coords
+    var type:  PowerupType
+    var col:   Int
+    var node:  SKNode
+}
+
+func makePowerupNode(_ type: PowerupType) -> SKNode {
+    let container = SKNode()
+    let rect = SKShapeNode(
+        rect: CGRect(x: -PU_W/2, y: -PU_H/2, width: PU_W, height: PU_H),
+        cornerRadius: 5
+    )
+    rect.fillColor   = type.fillColor
+    rect.strokeColor = type.fillColor.withAlphaComponent(0.5)
+    rect.lineWidth   = 1
+    container.addChild(rect)
+    let lbl = SKLabelNode(text: type.label)
+    lbl.fontName                 = "Helvetica-Bold"
+    lbl.fontSize                 = 9
+    lbl.fontColor                = .white
+    lbl.verticalAlignmentMode   = .center
+    lbl.horizontalAlignmentMode = .center
+    lbl.zPosition                = 1
+    container.addChild(lbl)
+    return container
+}
+
 // ─── Ball ────────────────────────────────────────────────────────────────────
 struct BallState {
     var x, y, vx, vy: CGFloat
@@ -211,12 +261,15 @@ class BrickBreakerScene: SKScene {
     var onTap:           (() -> Void)?
     var onLoseLife:      (() -> Void)?
     var onLevelClear:    (() -> Void)?
-    // (x, y, colorIdx, col) — used by particles step
-    var onBrickDestroyed: ((CGFloat, CGFloat, Int, Int) -> Void)?
 
     // ball state
     private(set) var balls: [BallState] = []
     var speedActive = false
+
+    // power-up state
+    private var powerups: [PowerupState] = []
+    var wideTimer:  CGFloat = 0   // counts down in dt units
+    var speedTimer: CGFloat = 0
 
     // game-loop timing
     private var lastUpdateTime: TimeInterval = 0
@@ -332,7 +385,9 @@ class BrickBreakerScene: SKScene {
             dt = CGFloat(min((currentTime - lastUpdateTime) / (1.0/60.0), 3.0))
         }
         lastUpdateTime = currentTime
+        updateTimers(dt: dt)
         updateBalls(dt: dt)
+        updatePowerups(dt: dt)
     }
 
     private func updateBalls(dt: CGFloat) {
@@ -410,13 +465,151 @@ class BrickBreakerScene: SKScene {
             if destroyed {
                 let lvl = model?.level ?? 1
                 model?.score += pts * lvl
-                onBrickDestroyed?(brickCenterX, brickCenterY, colorIdx, col)
-                // Check level clear
+                tryDropPowerup(at: CGPoint(x: brickCenterX, y: brickCenterY), col: col)
                 if allBricksCleared { onLevelClear?() }
             }
             balls[ballIdx] = ball
             break  // one brick per ball per frame
         }
+    }
+
+    // ── Power-ups ────────────────────────────────────────────────────────────
+    func tryDropPowerup(at center: CGPoint, col: Int) {
+        guard Float.random(in: 0...1) <= 0.3 else { return }
+        let type = PowerupType.allCases.randomElement()!
+        let node = makePowerupNode(type)
+        node.position = center
+        node.zPosition = 4
+        addChild(node)
+        powerups.append(PowerupState(x: center.x, y: center.y, type: type, col: col, node: node))
+    }
+
+    private func updatePowerups(dt: CGFloat) {
+        let pTop = PADDLE_Y_CENTER + PADDLE_H / 2
+        let pBot = PADDLE_Y_CENTER - PADDLE_H / 2
+        var i = powerups.count - 1
+        while i >= 0 {
+            var pu = powerups[i]
+            pu.y -= PU_SPEED * dt          // fall downward
+            pu.node.position = CGPoint(x: pu.x, y: pu.y)
+
+            // Collect
+            if pu.y - PU_H/2 <= pTop && pu.y + PU_H/2 >= pBot &&
+               pu.x - PU_W/2 <= paddleX + paddleWidth && pu.x + PU_W/2 >= paddleX {
+                collectPowerup(pu)
+                pu.node.removeFromParent()
+                powerups.remove(at: i)
+                i -= 1; continue
+            }
+            if pu.y + PU_H/2 < 0 {     // fell off bottom
+                pu.node.removeFromParent(); powerups.remove(at: i); i -= 1; continue
+            }
+            powerups[i] = pu
+            i -= 1
+        }
+    }
+
+    private func collectPowerup(_ pu: PowerupState) {
+        switch pu.type {
+        case .wide:
+            let cx = paddleX + paddleWidth / 2
+            paddleWidth = min(PADDLE_W * 2, paddleWidth + 55)
+            paddleX = max(0, min(GW - paddleWidth, cx - paddleWidth / 2))
+            wideTimer = 600
+            updatePaddleNode(style: .wide)
+
+        case .triball:
+            let ref = balls.first(where: { $0.launched }) ?? balls.first
+            guard let ref else { return }
+            let spd = currentSpeed()
+            let extras = balls.filter { !$0.isPrimary }.count
+            for i in 0..<2 {
+                let angle = CGFloat.pi/2 + (i == 0 ? -0.6 : 0.6)
+                let color = EXTRA_BALL_COLORS[(extras + i) % EXTRA_BALL_COLORS.count]
+                let node = makeBallNode(isPrimary: false, color: color)
+                node.position = CGPoint(x: ref.x, y: ref.y)
+                addChild(node)
+                balls.append(BallState(
+                    x: ref.x, y: ref.y,
+                    vx: cos(angle) * spd, vy: sin(angle) * spd,
+                    launched: true, isPrimary: false, node: node
+                ))
+            }
+
+        case .laser:
+            fireLaserColumn(pu.col)
+
+        case .speed:
+            speedTimer = 480
+            speedActive = true
+            let tgt = currentSpeed()
+            for i in balls.indices {
+                guard balls[i].launched else { continue }
+                let sp = sqrt(balls[i].vx*balls[i].vx + balls[i].vy*balls[i].vy)
+                if sp > 0 { balls[i].vx = (balls[i].vx/sp)*tgt; balls[i].vy = (balls[i].vy/sp)*tgt }
+            }
+            updatePaddleNode(style: .speed)
+        }
+    }
+
+    func fireLaserColumn(_ col: Int) {
+        let colX = BRICK_OFFSET_X + CGFloat(col) * (BRICK_W + BRICK_GAP) + BRICK_W/2
+        // Destroy all bricks in column
+        let targets = brickLive.filter { $0.value.col == col }.map { $0.key }
+        for node in targets {
+            guard let live = brickLive[node] else { continue }
+            let pts = BRICK_COLORS[live.colorIdx % BRICK_COLORS.count].pts
+            node.removeFromParent()
+            brickLive.removeValue(forKey: node)
+            model?.score += pts * (model?.level ?? 1)
+        }
+        if !targets.isEmpty && allBricksCleared { onLevelClear?() }
+
+        // Flash beam
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: colX, y: PADDLE_Y_CENTER))
+        path.addLine(to: CGPoint(x: colX, y: GH))
+        let beam = SKShapeNode(path: path)
+        beam.strokeColor = SKColor(red:1, green:0.40, blue:0, alpha:0.9)
+        beam.lineWidth = 4; beam.zPosition = 7
+        addChild(beam)
+        beam.run(SKAction.sequence([
+            SKAction.wait(forDuration: 0.25),
+            SKAction.fadeOut(withDuration: 0.2),
+            SKAction.removeFromParent()
+        ]))
+    }
+
+    private func updateTimers(dt: CGFloat) {
+        if wideTimer > 0 {
+            wideTimer -= dt
+            if wideTimer <= 0 {
+                wideTimer = 0
+                let cx = paddleX + paddleWidth / 2
+                paddleWidth = PADDLE_W
+                paddleX = max(0, min(GW - paddleWidth, cx - paddleWidth / 2))
+                updatePaddleNode(style: speedTimer > 0 ? .speed : .normal)
+            }
+        }
+        if speedTimer > 0 {
+            speedTimer -= dt
+            if speedTimer <= 0 {
+                speedTimer = 0; speedActive = false
+                let tgt = currentSpeed()
+                for i in balls.indices {
+                    guard balls[i].launched else { continue }
+                    let sp = sqrt(balls[i].vx*balls[i].vx + balls[i].vy*balls[i].vy)
+                    if sp > 0 { balls[i].vx = (balls[i].vx/sp)*tgt; balls[i].vy = (balls[i].vy/sp)*tgt }
+                }
+                updatePaddleNode(style: wideTimer > 0 ? .wide : .normal)
+            }
+        }
+    }
+
+    func clearPowerups() {
+        powerups.forEach { $0.node.removeFromParent() }
+        powerups.removeAll()
+        wideTimer = 0; speedTimer = 0; speedActive = false
     }
 
     // ── Build bricks ─────────────────────────────────────────────────────────
@@ -481,6 +674,7 @@ class BrickBreakerScene: SKScene {
     var allBricksCleared: Bool { brickLive.isEmpty }
 
     func resetPaddle() {
+        clearPowerups()
         paddleWidth = PADDLE_W
         paddleX     = GW / 2 - PADDLE_W / 2
         updatePaddleNode()
