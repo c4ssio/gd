@@ -32,6 +32,17 @@ let PADDLE_H: CGFloat = 10
 // HTML: paddle.y = GH-36, occupies rows 484–494 from top → SpriteKit centre = 31
 let PADDLE_Y_CENTER: CGFloat = 31
 
+// Ball
+let BALL_R: CGFloat    = 7
+let BASE_SPEED: CGFloat = 4.5
+
+let EXTRA_BALL_COLORS: [SKColor] = [
+    SKColor(red:0,    green:0.96, blue:1,    alpha:1), // cyan
+    SKColor(red:1,    green:0,    blue:0.50, alpha:1), // pink
+    SKColor(red:0,    green:1,    blue:0.53, alpha:1), // green
+    SKColor(red:0.73, green:0.27, blue:1,    alpha:1), // purple
+]
+
 // ─── Brick colour table ──────────────────────────────────────────────────────
 struct BrickColor {
     let fill: SKColor
@@ -133,6 +144,29 @@ class GameModel: ObservableObject {
     @Published var state: GameState = .idle
 }
 
+// ─── Ball ────────────────────────────────────────────────────────────────────
+struct BallState {
+    var x, y, vx, vy: CGFloat
+    var launched:  Bool
+    var isPrimary: Bool
+    var node:      SKShapeNode
+}
+
+func makeBallNode(isPrimary: Bool, color: SKColor? = nil) -> SKShapeNode {
+    let n = SKShapeNode(circleOfRadius: BALL_R)
+    if isPrimary {
+        n.fillColor   = SKColor(red:1,    green:0.90, blue:0,    alpha:1)
+        n.strokeColor = SKColor(red:1,    green:0.60, blue:0,    alpha:0.8)
+    } else {
+        let c = color ?? EXTRA_BALL_COLORS[0]
+        n.fillColor   = c
+        n.strokeColor = c.withAlphaComponent(0.6)
+    }
+    n.lineWidth  = 3
+    n.zPosition  = 6
+    return n
+}
+
 // ─── Live brick info stored per node ─────────────────────────────────────────
 struct BrickLive {
     var hp:       Int
@@ -173,8 +207,17 @@ class BrickBreakerScene: SKScene {
     private var dragStartPaddleX: CGFloat = 0
     private var dragMoved = false
 
-    // callback so ContentView can react to a "tap" (future ball launch)
-    var onTap: (() -> Void)?
+    // callbacks
+    var onTap:      (() -> Void)?
+    var onLoseLife: (() -> Void)?
+    var onLevelClear: (() -> Void)?
+
+    // ball state
+    private(set) var balls: [BallState] = []
+    var speedActive = false
+
+    // game-loop timing
+    private var lastUpdateTime: TimeInterval = 0
 
     override func didMove(to view: SKView) {
         backgroundColor = .bgCanvas
@@ -248,6 +291,94 @@ class BrickBreakerScene: SKScene {
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         if !dragMoved { onTap?() }
         dragMoved = false
+    }
+
+    // ── Ball helpers ─────────────────────────────────────────────────────────
+    func currentSpeed() -> CGFloat {
+        let base = BASE_SPEED + CGFloat((model?.level ?? 1) - 1) * 0.35
+        return speedActive ? base * 1.65 : base
+    }
+
+    func resetBalls() {
+        balls.forEach { $0.node.removeFromParent() }
+        balls.removeAll()
+        let startX = paddleX + paddleWidth / 2
+        let startY = PADDLE_Y_CENTER + PADDLE_H / 2 + BALL_R + 2
+        let node = makeBallNode(isPrimary: true)
+        node.position = CGPoint(x: startX, y: startY)
+        addChild(node)
+        balls.append(BallState(x: startX, y: startY, vx: 0, vy: 0,
+                               launched: false, isPrimary: true, node: node))
+    }
+
+    func launchBall() {
+        guard balls.first?.launched == false else { return }
+        let angle = CGFloat.pi/2 + CGFloat.random(in: -0.4...0.4)
+        let spd = currentSpeed()
+        balls[0].vx = cos(angle) * spd
+        balls[0].vy = sin(angle) * spd
+        balls[0].launched = true
+    }
+
+    // ── Game loop ────────────────────────────────────────────────────────────
+    override func update(_ currentTime: TimeInterval) {
+        guard model?.state == .playing else { lastUpdateTime = 0; return }
+        let dt: CGFloat
+        if lastUpdateTime == 0 {
+            dt = 1
+        } else {
+            dt = CGFloat(min((currentTime - lastUpdateTime) / (1.0/60.0), 3.0))
+        }
+        lastUpdateTime = currentTime
+        updateBalls(dt: dt)
+    }
+
+    private func updateBalls(dt: CGFloat) {
+        // Snap un-launched primary ball to paddle centre
+        if balls.first?.launched == false {
+            let sx = paddleX + paddleWidth / 2
+            let sy = PADDLE_Y_CENTER + PADDLE_H / 2 + BALL_R + 2
+            balls[0].x = sx; balls[0].y = sy
+            balls[0].node.position = CGPoint(x: sx, y: sy)
+        }
+
+        var i = balls.count - 1
+        while i >= 0 {
+            var b = balls[i]
+            guard b.launched else { i -= 1; continue }
+
+            b.x += b.vx * dt
+            b.y += b.vy * dt
+
+            // Wall / ceiling bounces
+            if b.x - BALL_R < 0  { b.x = BALL_R;      b.vx =  abs(b.vx) }
+            if b.x + BALL_R > GW { b.x = GW - BALL_R; b.vx = -abs(b.vx) }
+            if b.y + BALL_R > GH { b.y = GH - BALL_R; b.vy = -abs(b.vy) }
+
+            // Fell off bottom
+            if b.y - BALL_R < 0 {
+                b.node.removeFromParent()
+                balls.remove(at: i)
+                if b.isPrimary { onLoseLife?(); return }
+                i -= 1; continue
+            }
+
+            // Paddle bounce (ball moving downward in SpriteKit = vy < 0)
+            let pTop = PADDLE_Y_CENTER + PADDLE_H / 2
+            let pBot = PADDLE_Y_CENTER - PADDLE_H / 2
+            if b.vy < 0 && b.y - BALL_R <= pTop && b.y + BALL_R >= pBot
+                       && b.x >= paddleX && b.x <= paddleX + paddleWidth {
+                b.vy = abs(b.vy)
+                let rel = (b.x - (paddleX + paddleWidth / 2)) / (paddleWidth / 2)
+                b.vx = rel * BASE_SPEED * 1.2
+                let spd = sqrt(b.vx*b.vx + b.vy*b.vy), tgt = currentSpeed()
+                b.vx = (b.vx/spd)*tgt; b.vy = (b.vy/spd)*tgt
+            }
+
+            b.node.position = CGPoint(x: b.x, y: b.y)
+            balls[i] = b
+            i -= 1
+        }
     }
 
     // ── Build bricks ─────────────────────────────────────────────────────────
@@ -435,7 +566,14 @@ struct ContentView: View {
         }
         .onAppear {
             scene.model = model
-            scene.buildBricks()   // preview bricks before game starts
+            scene.buildBricks()       // preview bricks on start screen
+            scene.resetBalls()
+
+            scene.onTap = {
+                guard model.state == .playing else { return }
+                scene.launchBall()
+            }
+            scene.onLoseLife = { loseLife() }
         }
     }
 
@@ -446,6 +584,17 @@ struct ContentView: View {
         model.state = .playing
         scene.resetPaddle()
         scene.buildBricks()
+        scene.resetBalls()
+    }
+
+    private func loseLife() {
+        model.lives -= 1
+        if model.lives <= 0 {
+            model.state = .dead
+        } else {
+            scene.resetPaddle()
+            scene.resetBalls()
+        }
     }
 }
 
