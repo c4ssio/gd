@@ -378,6 +378,8 @@ struct ContentView: View {
 
     // Title flicker state
     @State private var titleOpacity: Double = 1.0
+    // Drag-vs-tap tracking (mirrors HTML touchMoved threshold of 4px)
+    @State private var dragMoved = false
 
     // MARK: body
     var body: some View {
@@ -416,11 +418,15 @@ struct ContentView: View {
                     DragGesture(minimumDistance: 0)
                         .onChanged { v in
                             if game.phase == .menu { game.startGame(in: geo.size) }
-                            game.movePaddle(to: v.location.x)
+                            // Mirror HTML touchMoved: only count as drag if moved > 4pt
+                            if abs(v.location.x - v.startLocation.x) > 4 { dragMoved = true }
+                            if dragMoved { game.movePaddle(to: v.location.x) }
                         }
-                )
-                .simultaneousGesture(
-                    TapGesture().onEnded { if game.phase == .playing { game.launch() } }
+                        .onEnded { _ in
+                            // Clean tap (no drag) → launch
+                            if !dragMoved && game.phase == .playing { game.launch() }
+                            dragMoved = false
+                        }
                 )
                 .onReceive(timer) { _ in game.update() }
             }
