@@ -545,7 +545,7 @@ struct GameView: View {
                     Canvas { ctx, size in
                         renderFrame(ctx: ctx, size: size, engine: engine)
                     }
-                    .onChange(of: tl.date) { _ in
+                    .onChange(of: tl.date) {
                         engine.tick(size: geo.size)
                     }
                 }
