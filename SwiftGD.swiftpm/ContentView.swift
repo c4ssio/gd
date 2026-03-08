@@ -61,12 +61,12 @@ class GDEngine: ObservableObject {
     var progress: CGFloat = 0
 
     // Obstacles & particles
-    var obstacles: [GDObstacle] = []
+    @Published var obstacles: [GDObstacle] = []
     var particles: [GDParticle] = []
     var stars: [GDStar] = []
 
     // Floor gaps: world-x ranges where floor is absent
-    var floorGaps: [(start: CGFloat, end: CGFloat)] = []
+    @Published var floorGaps: [(start: CGFloat, end: CGFloat)] = []
 
     // Screen shake
     var shakeTimer: CGFloat = 0
@@ -1232,13 +1232,25 @@ fileprivate func renderEditor(ctx: GraphicsContext, size: CGSize, engine: GDEngi
         ctx.draw(endLbl, at: CGPoint(x: endX + 4, y: 18), anchor: .topLeading)
     }
 
-    // Draw built-in obstacles (dim)
+    // Draw pits (floor gaps) as red cutouts in the ground
+    for gap in engine.floorGaps {
+        let sx = gap.start - scroll
+        let ex = gap.end - scroll
+        guard ex > 0 && sx < size.width else { continue }
+        let pitRect = CGRect(x: sx, y: gY, width: ex - sx, height: size.height - gY)
+        ctx.fill(Path(pitRect), with: .color(Color(red: 0.5, green: 0, blue: 0).opacity(0.9)))
+        ctx.stroke(Path(pitRect), with: .color(Color(red: 1, green: 0.2, blue: 0.2)), lineWidth: 2)
+        let lbl = Text("PIT").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundColor(.red)
+        ctx.draw(lbl, at: CGPoint(x: max(sx, 0) + 4, y: gY + 4), anchor: .topLeading)
+    }
+
+    // Draw built-in obstacles (clearly visible, slightly muted vs custom)
     for obs in engine.obstacles {
         let sx = obs.rect.minX - scroll
         guard sx > -obs.rect.width && sx < size.width else { continue }
         let sr = CGRect(x: sx, y: obs.rect.minY, width: obs.rect.width, height: obs.rect.height)
         ctx.drawLayer { c in
-            c.opacity = 0.45
+            c.opacity = 0.85
             drawObstacleShape(ctx: c, obs: obs, sr: sr)
         }
     }
