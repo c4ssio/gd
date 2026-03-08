@@ -125,19 +125,52 @@ while accumulator >= fixedStep {
 
 ---
 
-### 8. Syntax-check before committing
+### 8. Always run both test scripts before committing
 
-`swiftc -parse` validates Swift syntax without building or linking. Run it on `ContentView.swift` before every commit to catch API typos early:
+Two headless Swift scripts live at the repo root. Run both before every commit:
 
 ```bash
-swiftc -parse SwiftGD.swiftpm/ContentView.swift
+swiftc -parse SwiftGD.swiftpm/ContentView.swift   # syntax only — catches API typos
+swift test_game.swift                              # physics + editor logic (22 assertions)
+swift simulate_level.swift                         # full AI playthrough + difficulty score
 ```
 
-Returns nothing on success, errors on failure.
+**`test_game.swift`** covers:
+- Jump arc geometry (air time, distance, peak height)
+- Jump pad trigger condition
+- Spike clearance geometry (which spacings are physically passable)
+- Obstacle spacing / rest-frame difficulty ratings
+- Editor erase hit-test logic
+- Editor Y-scale coordinate mapping
+- Portal mode-switch + cooldown
+
+**`simulate_level.swift`** covers:
+- Full level completability (AI plays start→finish)
+- Per-jump difficulty rating (🟢🟡🟠🔴) and min/avg rest frames
+- Portal transitions and ship-mode navigation
+
+**When to run each:**
+- Any physics constant change (`gravity`, `jumpVel`, `scrollSpd`) → run all three
+- Any level layout change → run `simulate_level.swift` at minimum
+- Any editor gesture/erase/place change → run `test_game.swift`
+- Any Swift API change → run `swiftc -parse` first
+
+### 9. Erase mode vs drag-to-move conflict
+
+When `editorEraseMode` is true, the drag gesture must NOT enter move-mode even if the finger starts on an obstacle. If it does, `onEnded` clears `movingIdx` and skips `editorAction`, so the erase never fires.
+
+**Fix pattern:** gate the move-mode check on `!engine.editorEraseMode`:
+
+```swift
+if !engine.editorEraseMode,
+   let idx = engine.customObstacles.indices.first(where: { ... }) {
+    movingIdx = idx
+}
+```
 
 ---
 
-### 9. Level design — minimum rest frames between jumps
+### 10. Level design — minimum rest frames between jumps
 
 Jump arc at `gravity=0.65, jumpVel=-13.5, scrollSpd=5`: **41 frames air time = 205 px horizontal**. Obstacles spaced less than 205 px apart require jumping before landing — physically impossible.
 
@@ -145,7 +178,7 @@ Jump arc at `gravity=0.65, jumpVel=-13.5, scrollSpd=5`: **41 frames air time = 2
 
 ---
 
-### 10. Git workflow — feature branches, not main
+### 11. Git workflow — feature branches, not main
 
 Always work on a feature branch. Committing directly to `main` causes Xcode to require stashing whenever the user tries to switch branches.
 

@@ -686,7 +686,8 @@ struct EditorView: View {
                                 let startWorldX = v.startLocation.x + engine.editorScrollX
                                 let startGameY  = v.startLocation.y / yScale
                                 let hitPt = CGPoint(x: startWorldX, y: startGameY)
-                                if let idx = engine.customObstacles.indices.first(where: {
+                                if !engine.editorEraseMode,
+                                   let idx = engine.customObstacles.indices.first(where: {
                                     engine.customObstacles[$0].rect.insetBy(dx: -10, dy: -10).contains(hitPt)
                                 }) {
                                     movingIdx = idx
