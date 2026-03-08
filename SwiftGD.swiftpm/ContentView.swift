@@ -88,13 +88,24 @@ class GDEngine: ObservableObject {
     // MARK: Setup
 
     func setup(size: CGSize) {
-        guard !sizeSet else { return }
-        sizeSet = true
-        groundY = size.height - groundH
-        playerY = groundY - playerH
-        onGround = true
-        buildLevel()
-        buildStars(size: size)
+        let newGroundY = size.height - groundH
+        if !sizeSet {
+            // First time: full initialisation
+            sizeSet = true
+            groundY = newGroundY
+            playerY = groundY - playerH
+            onGround = true
+            buildLevel()
+            buildStars(size: size)
+        } else if abs(newGroundY - groundY) > 20 {
+            // Orientation changed — rebuild level geometry and clamp player
+            groundY = newGroundY
+            buildLevel()
+            buildStars(size: size)
+            // Keep player above ground; if they were below the new ground just land them
+            playerY = min(playerY, groundY - playerH)
+            if playerY >= groundY - playerH { velY = 0; onGround = true }
+        }
     }
 
     func buildStars(size: CGSize) {
