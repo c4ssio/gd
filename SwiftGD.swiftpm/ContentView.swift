@@ -488,21 +488,21 @@ class GDEngine: ObservableObject {
         let worldX = pos.x + editorScrollX
         let gY     = groundY
 
+        // Canvas Y → game world Y (inverse of yScale used in renderEditor)
+        let canvasGroundY = size.height - groundH
+        let yScale = groundY > 0 ? canvasGroundY / groundY : 1.0
+        let gameY = pos.y / yScale
+
         if editorEraseMode {
-            // Remove the first custom obstacle whose rect contains tap
+            // Remove the first custom obstacle whose game-world rect contains tap
             customObstacles.removeAll { obs in
-                obs.rect.insetBy(dx: -10, dy: -10).contains(CGPoint(x: worldX, y: pos.y))
+                obs.rect.insetBy(dx: -10, dy: -10).contains(CGPoint(x: worldX, y: gameY))
             }
             return
         }
 
         // Snap X to 40pt grid
         let snappedX = (worldX / 40).rounded(.down) * 40
-
-        // Canvas Y → game world Y (inverse of yScale used in renderEditor)
-        let canvasGroundY = size.height - groundH
-        let yScale = groundY > 0 ? canvasGroundY / groundY : 1.0
-        let gameY = pos.y / yScale  // tap Y in game-world coordinates
 
         let obs: GDObstacle
         switch selectedKind {
