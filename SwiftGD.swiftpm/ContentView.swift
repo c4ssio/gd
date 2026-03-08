@@ -456,11 +456,11 @@ class GDEngine: ObservableObject {
 
     // MARK: - Editor
 
-    var editorOpen        = false
-    var editorScrollX:    CGFloat = 0
-    var selectedKind:     ObstacleKind = .spike
-    var editorEraseMode   = false
-    var customObstacles:  [GDObstacle] = []
+    @Published var editorOpen        = false
+    @Published var editorScrollX:    CGFloat = 0
+    @Published var selectedKind:     ObstacleKind = .spike
+    @Published var editorEraseMode   = false
+    @Published var customObstacles:  [GDObstacle] = []
 
     func openEditor() {
         // Rebuild clean built-in level, preserve custom
