@@ -498,17 +498,23 @@ class GDEngine: ObservableObject {
 
         // Snap X to 40pt grid
         let snappedX = (worldX / 40).rounded(.down) * 40
+
+        // Canvas Y → game world Y (inverse of yScale used in renderEditor)
+        let canvasGroundY = size.height - groundH
+        let yScale = groundY > 0 ? canvasGroundY / groundY : 1.0
+        let gameY = pos.y / yScale  // tap Y in game-world coordinates
+
         let obs: GDObstacle
         switch selectedKind {
         case .spike:
             obs = GDObstacle(rect: CGRect(x: snappedX + 2, y: gY - 30, width: 26, height: 29),
                              kind: .spike, colorIdx: 0)
         case .block:
-            let ty = (pos.y / 40).rounded(.down) * 40
+            let ty = (gameY / 40).rounded(.down) * 40
             obs = GDObstacle(rect: CGRect(x: snappedX, y: ty, width: 60, height: 60),
                              kind: .block, colorIdx: 1)
         case .platform:
-            let ty = (pos.y / 40).rounded(.down) * 40
+            let ty = (gameY / 40).rounded(.down) * 40
             obs = GDObstacle(rect: CGRect(x: snappedX, y: ty, width: 120, height: 12),
                              kind: .platform, colorIdx: 2)
         case .ceilSpike:
@@ -651,8 +657,10 @@ struct EditorView: View {
 
             // ── Editor canvas ──
             GeometryReader { geo in
-                Canvas { ctx, size in
-                    renderEditor(ctx: ctx, size: size, engine: engine)
+                TimelineView(.fixed(interval: 1/30)) { _ in
+                    Canvas { ctx, size in
+                        renderEditor(ctx: ctx, size: size, engine: engine)
+                    }
                 }
                 .gesture(
                     DragGesture(minimumDistance: 0)
@@ -1172,7 +1180,12 @@ fileprivate func renderEditor(ctx: GraphicsContext, size: CGSize, engine: GDEngi
              with: .color(Color(red: 0.04, green: 0.04, blue: 0.14)))
 
     let scroll = engine.editorScrollX
-    let gY     = engine.groundY
+
+    // Y scaling: game world uses full-screen groundY, but editor canvas is
+    // shorter (toolbars eat into height). Scale all Y coords proportionally.
+    let gameGroundY = engine.groundY > 0 ? engine.groundY : size.height - groundH
+    let gY = size.height - groundH          // where the ground sits in this canvas
+    let yScale = gY / gameGroundY           // e.g. 250/343 ≈ 0.73
 
     // Grid lines
     let gsp: CGFloat = 40
@@ -1232,7 +1245,12 @@ fileprivate func renderEditor(ctx: GraphicsContext, size: CGSize, engine: GDEngi
         ctx.draw(endLbl, at: CGPoint(x: endX + 4, y: 18), anchor: .topLeading)
     }
 
-    // Draw pits (floor gaps) as red cutouts in the ground
+    // Helper: convert a game-world rect to editor-canvas rect
+    func editorRect(_ r: CGRect) -> CGRect {
+        CGRect(x: r.minX - scroll, y: r.minY * yScale, width: r.width, height: r.height * yScale)
+    }
+
+    // Draw pits (floor gaps) as red cutouts
     for gap in engine.floorGaps {
         let sx = gap.start - scroll
         let ex = gap.end - scroll
@@ -1244,22 +1262,20 @@ fileprivate func renderEditor(ctx: GraphicsContext, size: CGSize, engine: GDEngi
         ctx.draw(lbl, at: CGPoint(x: max(sx, 0) + 4, y: gY + 4), anchor: .topLeading)
     }
 
-    // Draw built-in obstacles (clearly visible, slightly muted vs custom)
+    // Draw built-in obstacles (dimmed — not editable)
     for obs in engine.obstacles {
-        let sx = obs.rect.minX - scroll
-        guard sx > -obs.rect.width && sx < size.width else { continue }
-        let sr = CGRect(x: sx, y: obs.rect.minY, width: obs.rect.width, height: obs.rect.height)
+        let sr = editorRect(obs.rect)
+        guard sr.minX > -sr.width && sr.minX < size.width else { continue }
         ctx.drawLayer { c in
             c.opacity = 0.85
             drawObstacleShape(ctx: c, obs: obs, sr: sr)
         }
     }
 
-    // Draw custom obstacles (bright, with orange outline)
+    // Draw custom obstacles (full brightness + orange outline — editable)
     for obs in engine.customObstacles {
-        let sx = obs.rect.minX - scroll
-        guard sx > -obs.rect.width && sx < size.width else { continue }
-        let sr = CGRect(x: sx, y: obs.rect.minY, width: obs.rect.width, height: obs.rect.height)
+        let sr = editorRect(obs.rect)
+        guard sr.minX > -sr.width && sr.minX < size.width else { continue }
         drawObstacleShape(ctx: ctx, obs: obs, sr: sr)
         ctx.stroke(Path(sr.insetBy(dx: -2, dy: -2)),
                    with: .color(Color(red: 1, green: 0.6, blue: 0)), lineWidth: 2)
