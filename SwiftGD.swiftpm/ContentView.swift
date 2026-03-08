@@ -90,6 +90,7 @@ class GDEngine: ObservableObject {
         sizeSet = true
         groundY = size.height - groundH
         playerY = groundY - playerH
+        onGround = true
         buildLevel()
         buildStars(size: size)
     }
@@ -404,7 +405,7 @@ class GDEngine: ObservableObject {
         velY = 0
         scrollX = 0
         progress = 0
-        onGround = false
+        onGround = true
         mode = .cube
         holding = false
         particles = []
