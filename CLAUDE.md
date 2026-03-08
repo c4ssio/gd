@@ -130,7 +130,7 @@ while accumulator >= fixedStep {
 Two headless Swift scripts live at the repo root. Run both before every commit:
 
 ```bash
-swiftc -parse SwiftGD.swiftpm/ContentView.swift   # syntax only — catches API typos
+swiftc -parse SwiftGD.swiftpm/ContentView.swift   # syntax only — catches API typos, NOT exhaustiveness or type errors
 swift test_game.swift                              # physics + editor logic (22 assertions)
 swift simulate_level.swift                         # full AI playthrough + difficulty score
 ```
@@ -154,6 +154,7 @@ swift simulate_level.swift                         # full AI playthrough + diffi
 - Any level layout change → run `simulate_level.swift` at minimum
 - Any editor gesture/erase/place change → run `test_game.swift`
 - Any Swift API change → run `swiftc -parse` first
+- **Limitation:** `swiftc -parse` does NOT catch exhaustiveness errors or type mismatches — those require full compilation in Xcode. Always verify in Xcode/Swift Playgrounds before committing.
 
 ### 9. Erase mode vs drag-to-move conflict
 

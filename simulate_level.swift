@@ -10,8 +10,8 @@ let playerW:  Double = 30
 let playerH:  Double = 30
 let gravity:  Double = 0.65
 let jumpVel:  Double = -13.5
-let scrollSpd: Double = 5
-let levelLen:  Double = 9300
+let scrollSpd: Double = 10
+let levelLen:  Double = 10200
 let groundH:   Double = 50
 
 // Screen size — default is iPhone 15 landscape
@@ -70,40 +70,30 @@ func buildLevel() -> (obstacles: [Obs], gaps: [(Double, Double)]) {
         obs.append(Obs(x: x, y: y, w: w, h: h, kind: .block))
     }
 
-    // ── Section 1 ──────────────────────────────────────── x 900–1900
-    spike(900); spike(1400); spike(1900)
+    // Speed 10: jump arc = 41 frames, 410px. Easy=1000px, Medium=800px, Hard=600px
 
-    // ── Section 2 ──────────────────────────────────────── x 2400–3500
-    spike(2400); spike(2830); spike(3260); pad(3580)
+    // ── Section 1: Tutorial — 2 easy spikes, 1000px apart ───────── x 900–1900
+    spike(900); spike(1900)
 
-    // ── Section 3 ──────────────────────────────────────── x 3800–4600
-    plat(3800, gY-80, 150); cSpike(3870, 30)
-    plat(4100, gY-130, 120); cSpike(4140, 20)
-    plat(4350, gY-80, 120)
-    spike(4580)
+    // ── Section 2: Rhythm — 3 medium spikes, 800px apart ─────────── x 2700–4300
+    spike(2700); spike(3500); spike(4300)
 
-    // ── Ship section ───────────────────────────────────── x 4780–4980
-    portal(4780)
-    let tunnelY = gY - 110
-    twall(4820, 0, 180, tunnelY)
-    twall(4920, 0, 180, tunnelY-20)
-    portal(4970)
+    // ── Section 3: Platform + ceiling threat ─────────────────────── x 4900–5900
+    plat(4900, gY-90, 200); cSpike(4960, 30)
+    plat(5400, gY-130, 160); cSpike(5450, 20)
+    spike(5900)
 
-    // ── Section 4 ──────────────────────────────────────── x 5150–6320
-    pit(5150, 5310)
-    spike(5760)
-    pit(6160, 6320)
+    // ── Ship section: portal → open fly zone → return portal ─────── x 6300–6600
+    portal(6300)
+    portal(6600)
 
-    // ── Section 5 ──────────────────────────────────────── x 6620–7480
-    spike(6620)
-    cSpike(6900, 15)
-    spike(7050)
-    plat(7300, gY-90, 140); cSpike(7330, 20)
-    spike(7480)
+    // ── Section 4: Death pits — 2 pits + 1 spike ─────────────────── x 7100–8720
+    pit(7100, 7320)
+    spike(7900)
+    pit(8500, 8720)
 
-    // ── Section 6 ──────────────────────────────────────── x 7830–8780
-    spike(7830, 0); spike(8250, 1); spike(8620, 2)
-    pit(8950, 9070)
+    // ── Section 5: Final gauntlet — 2 hard spikes ────────────────── x 9100–9700
+    spike(9100, 0); spike(9700, 1)
 
     return (obs, gaps)
 }
@@ -143,8 +133,8 @@ func shouldJump(px: Double, scrollX: Double,
     }
 
     // Jump when the gap is just about to reach the player's left foot.
-    // The jump arc covers ~205px, so we need scrollX to be ~(gap.start - 205)
-    // when we jump. Trigger when gap start is 0–85px ahead of player left edge.
+    // The jump arc covers ~410px at speed 10, so jumping 85px before the gap
+    // gives plenty of clearance. Trigger when gap start is 0–85px ahead of player left edge.
     for gap in gaps {
         let gapScreenStart = gap.0 - scrollX
         if gapScreenStart > px && gapScreenStart < px + 85 {

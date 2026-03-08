@@ -10,7 +10,7 @@ let playerW:   Double = 30
 let playerH:   Double = 30
 let gravity:   Double = 0.65
 let jumpVel:   Double = -13.5
-let scrollSpd: Double = 5
+let scrollSpd: Double = 10
 let groundH:   Double = 50
 let screenW:   Double = 852
 let screenH:   Double = 393
@@ -59,7 +59,7 @@ func simulateJump() -> (peakY: Double, airFrames: Int, distTravelled: Double) {
 let jump = simulateJump()
 test("Jump arc: air time ~41 frames", abs(Double(jump.airFrames) - 41) <= 2,
      "got \(jump.airFrames) frames")
-test("Jump arc: horizontal distance ~205px", abs(jump.distTravelled - 205) <= 15,
+test("Jump arc: horizontal distance ~410px", abs(jump.distTravelled - 410) <= 20,
      "got \(Int(jump.distTravelled))px")
 test("Jump peak above ground by >100px", floorY - jump.peakY > 100,
      "peak at y=\(Int(jump.peakY)), ground at y=\(Int(floorY))")
@@ -118,14 +118,14 @@ func canClearSpike(spikeWorldX: Double, jumpWorldX: Double) -> Bool {
     return true
 }
 
-// With jump arc = 205px, spike enters player X range when n > (spikeDistance-26)/5 frames.
-// Clearable if that's after landing (>41 frames), or player is still rising enough to clear.
-test("Spike 300px ahead: clearable (spike enters range after landing)",
-     canClearSpike(spikeWorldX: 1300, jumpWorldX: 1000))
-test("Spike 200px ahead: NOT clearable (player descending through spike height at intersection)",
-     !canClearSpike(spikeWorldX: 1200, jumpWorldX: 1000))
-test("Spike 50px ahead: clearable (player still rising fast when spike enters range)",
-     canClearSpike(spikeWorldX: 1050, jumpWorldX: 1000))
+// With jump arc = 410px at speed 10, spike enters player X range at frame (dist-26)/10.
+// Clearable if player is above spike top (gY-30) when ranges overlap.
+test("Spike 600px ahead: clearable (player has landed before spike enters range)",
+     canClearSpike(spikeWorldX: 1600, jumpWorldX: 1000))
+test("Spike 420px ahead: NOT clearable (player still descending to ground level at intersection)",
+     !canClearSpike(spikeWorldX: 1420, jumpWorldX: 1000))
+test("Spike 100px ahead: clearable (player still rising fast when spike enters range)",
+     canClearSpike(spikeWorldX: 1100, jumpWorldX: 1000))
 
 section("Obstacle spacing / difficulty")
 
@@ -135,10 +135,10 @@ func restFrames(jump1WorldX: Double, jump2WorldX: Double) -> Int {
     return framesBetween - jump.airFrames
 }
 
-test("500px spacing → ≥59 rest frames (easy)",    restFrames(jump1WorldX: 0, jump2WorldX: 500) >= 59)
-test("400px spacing → ≥39 rest frames (medium)",  restFrames(jump1WorldX: 0, jump2WorldX: 400) >= 39)
-test("300px spacing → ≥19 rest frames (hard)",    restFrames(jump1WorldX: 0, jump2WorldX: 300) >= 19)
-test("200px spacing → ≤0 rest frames (too tight)", restFrames(jump1WorldX: 0, jump2WorldX: 200) <= 0)
+test("1000px spacing → ≥59 rest frames (easy)",    restFrames(jump1WorldX: 0, jump2WorldX: 1000) >= 59)
+test("800px spacing → ≥39 rest frames (medium)",   restFrames(jump1WorldX: 0, jump2WorldX: 800)  >= 39)
+test("600px spacing → ≥19 rest frames (hard)",     restFrames(jump1WorldX: 0, jump2WorldX: 600)  >= 19)
+test("400px spacing → ≤0 rest frames (too tight)", restFrames(jump1WorldX: 0, jump2WorldX: 400)  <= 0)
 
 section("Editor erase logic")
 

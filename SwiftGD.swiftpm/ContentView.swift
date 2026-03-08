@@ -5,8 +5,8 @@ fileprivate let playerW:    CGFloat = 30
 fileprivate let playerH:    CGFloat = 30
 fileprivate let gravity:    CGFloat = 0.65
 fileprivate let jumpVel:    CGFloat = -13.5
-fileprivate let scrollSpd:  CGFloat = 5
-fileprivate let levelLen:   CGFloat = 9300
+fileprivate let scrollSpd:  CGFloat = 10
+fileprivate let levelLen:   CGFloat = 10200
 fileprivate let groundH:    CGFloat = 50
 
 // MARK: - Types
@@ -14,7 +14,7 @@ fileprivate let groundH:    CGFloat = 50
 enum GDState  { case menu, playing, dead, victory }
 enum GameMode { case cube, ship }
 
-enum ObstacleKind { case spike, block, platform, ceilSpike, jumpPad, portal, speedUp, slowDown }
+enum ObstacleKind { case spike, block, platform, ceilSpike, jumpPad, portal, speedUp, slowDown, pit }
 
 struct GDObstacle {
     var rect: CGRect
@@ -170,55 +170,36 @@ class GDEngine: ObservableObject {
                 rect: CGRect(x: x, y: 20, width: 24, height: gY - 20),
                 kind: .portal, colorIdx: 0))
         }
-        // Tunnel wall for ship section (ceiling or floor block the passage)
-        func twall(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) {
-            obstacles.append(GDObstacle(
-                rect: CGRect(x: x, y: y, width: w, height: h),
-                kind: .block, colorIdx: 2))
-        }
+        // Speed 10 level — jump arc: 41 frames, 410px horizontal
+        // Easy = 1000px apart (59 rest frames), Medium = 800px (39), Hard = 600px (19)
 
-        // ── Section 1: Tutorial — 3 easy spikes, ~500px apart ──────── x 900–1900
-        // Rest between jumps: ~59 frames (comfortable)
-        spike(900); spike(1400); spike(1900)
+        // ── Section 1: Tutorial — 2 easy spikes, 1000px apart ───────── x 900–1900
+        spike(900); spike(1900)
 
-        // ── Section 2: Rhythm — 3 spikes + jump pad, ~430px apart ─── x 2400–3500
-        // Rest between jumps: ~45 frames (moderate)
-        spike(2400); spike(2830); spike(3260); pad(3580)
+        // ── Section 2: Rhythm — 3 medium spikes, 800px apart ─────────── x 2700–4300
+        spike(2700); spike(3500); spike(4300)
 
-        // ── Section 3: Platforms + ceiling threat ───────────────────── x 3800–4600
-        plat(3800, gY - 80,  150)
-        cSpike(3870, 30)
-        plat(4100, gY - 130, 120)
-        cSpike(4140, 20)
-        plat(4350, gY - 80,  120)
-        spike(4580)
+        // ── Section 3: Platforms + ceiling threat ────────────────────── x 4900–5900
+        // Spike(5900) is the only required jump; platforms are optional skill content
+        plat(4900, gY - 90,  200)
+        cSpike(4960, 30)
+        plat(5400, gY - 130, 160)
+        cSpike(5450, 20)
+        spike(5900)
 
-        // ── Ship section: portal → narrow tunnel → return portal ──── x 4780–4980
-        portal(4780)
-        let tunnelY = gY - 110
-        twall(4820, 0, 180, tunnelY)
-        twall(4920, 0, 180, tunnelY - 20)
-        portal(4970)
+        // ── Ship section: portal → open fly zone → return portal ─────── x 6300–6600
+        portal(6300)
+        portal(6600)
 
-        // ── Section 4: Death pits — 2 pits + 1 spike, ~450px apart ── x 5150–6320
-        // Rest between jumps: ~47 frames (comfortable)
-        pit(5150, 5310)
-        spike(5760)          // 450px after pit end
-        pit(6160, 6320)      // 400px after spike
+        // ── Section 4: Death pits — 2 pits + 1 spike ─────────────────── x 7100–8720
+        // Pit(7100): 39 rest from prev landing. Spike(7900): 39 rest. Pit(8500): 19 rest (hard)
+        pit(7100, 7320)
+        spike(7900)
+        pit(8500, 8720)
 
-        // ── Section 5: Mixed threats, ~430px apart ───────────────── x 6620–7500
-        // Rest between jumps: ~45 frames (moderate)
-        spike(6620)
-        cSpike(6900, 15)
-        spike(7050)          // 430px after spike(6620)
-        plat(7300, gY - 90, 140)
-        cSpike(7330, 20)
-        spike(7480)          // 430px after spike(7050)
-
-        // ── Section 6: Final gauntlet — spikes + pit, ~400px apart ── x 7830–9070
-        // Rest between jumps: ~30–43 frames (challenging but fair)
-        spike(7830, 0); spike(8250, 1); spike(8620, 2)
-        pit(8950, 9070)
+        // ── Section 5: Final gauntlet — 2 hard spikes ────────────────── x 9100–9700
+        // Each 600px apart = 19 rest frames (hard). Level ends before next required jump.
+        spike(9100, 0); spike(9700, 1)
     }
 
     // MARK: Input
@@ -412,6 +393,9 @@ class GDEngine: ObservableObject {
                     } else {
                         die(size: size); return
                     }
+
+                case .pit:
+                    break  // pits are floor gaps; collision handled by fall-off check
                 }
             }
 
@@ -492,11 +476,13 @@ class GDEngine: ObservableObject {
 
     // MARK: - Editor
 
-    @Published var editorOpen        = false
-    @Published var editorScrollX:    CGFloat = 0
-    @Published var selectedKind:     ObstacleKind = .spike
-    @Published var editorEraseMode   = false
-    @Published var customObstacles:  [GDObstacle] = []
+    @Published var editorOpen             = false
+    @Published var editorScrollX:         CGFloat = 0
+    @Published var selectedKind:          ObstacleKind = .spike
+    @Published var selectedSpikeColor:    Int = 0   // index into spikeColors; default cyan
+    @Published var selectedCeilSpikeColor:Int = 1   // index into spikeColors; default pink
+    @Published var editorEraseMode        = false
+    @Published var customObstacles:       [GDObstacle] = []
 
     func openEditor() {
         // Rebuild clean built-in level, preserve custom
@@ -509,8 +495,14 @@ class GDEngine: ObservableObject {
     }
 
     func editorTest() {
-        // Merge custom obstacles into main level then play
-        obstacles.append(contentsOf: customObstacles)
+        // Convert pit obstacles to floor gaps; merge the rest into main level
+        for obs in customObstacles {
+            if obs.kind == .pit {
+                floorGaps.append((start: obs.rect.minX, end: obs.rect.maxX))
+            } else {
+                obstacles.append(obs)
+            }
+        }
         editorOpen = false
         restartGame()
     }
@@ -544,7 +536,7 @@ class GDEngine: ObservableObject {
         switch selectedKind {
         case .spike:
             obs = GDObstacle(rect: CGRect(x: snappedX + 2, y: gY - 30, width: 26, height: 29),
-                             kind: .spike, colorIdx: 0)
+                             kind: .spike, colorIdx: selectedSpikeColor)
         case .block:
             let ty = (gameY / 40).rounded(.down) * 40
             obs = GDObstacle(rect: CGRect(x: snappedX, y: ty, width: 60, height: 60),
@@ -555,7 +547,7 @@ class GDEngine: ObservableObject {
                              kind: .platform, colorIdx: 2)
         case .ceilSpike:
             obs = GDObstacle(rect: CGRect(x: snappedX + 2, y: 20, width: 26, height: 29),
-                             kind: .ceilSpike, colorIdx: 1)
+                             kind: .ceilSpike, colorIdx: selectedCeilSpikeColor)
         case .jumpPad:
             obs = GDObstacle(rect: CGRect(x: snappedX, y: gY - 18, width: 36, height: 18),
                              kind: .jumpPad, colorIdx: 0)
@@ -568,6 +560,9 @@ class GDEngine: ObservableObject {
         case .slowDown:
             obs = GDObstacle(rect: CGRect(x: snappedX, y: 0, width: 30, height: gY),
                              kind: .slowDown, colorIdx: 0)
+        case .pit:
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: gY, width: 160, height: groundH),
+                             kind: .pit, colorIdx: 0)
         }
         customObstacles.append(obs)
     }
@@ -663,13 +658,14 @@ struct EditorView: View {
 
     let kindOptions: [(ObstacleKind, String)] = [
         (.spike,    "▲ Spike"),
-        (.block,    "■ Block"),
-        (.platform, "— Plat"),
         (.ceilSpike,"▼ C.Spike"),
         (.jumpPad,  "⬆ Pad"),
+        (.pit,      "▽ Pit"),
+        (.platform, "— Plat"),
+        (.block,    "■ Block"),
         (.portal,   "⬡ Portal"),
-        (.speedUp,  "⚡ 2× Speed"),
-        (.slowDown, "🐢 ½ Speed"),
+        (.speedUp,  "⚡ 2×"),
+        (.slowDown, "↓ ½×"),
     ]
 
     var body: some View {
@@ -698,6 +694,33 @@ struct EditorView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(Color(red: 0.05, green: 0.05, blue: 0.18))
+
+            // ── Spike color picker (shown when spike or ceilSpike selected) ──
+            if engine.selectedKind == .spike || engine.selectedKind == .ceilSpike {
+                let isCeil = engine.selectedKind == .ceilSpike
+                let selectedColor = isCeil ? engine.selectedCeilSpikeColor : engine.selectedSpikeColor
+                HStack(spacing: 10) {
+                    Text(isCeil ? "Ceiling color:" : "Spike color:")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.7))
+                    ForEach(0..<spikeColors.count, id: \.self) { i in
+                        Button(action: {
+                            if isCeil { engine.selectedCeilSpikeColor = i }
+                            else       { engine.selectedSpikeColor    = i }
+                        }) {
+                            Circle()
+                                .fill(spikeColors[i])
+                                .frame(width: 22, height: 22)
+                                .overlay(Circle().stroke(Color.white, lineWidth: selectedColor == i ? 2.5 : 0))
+                                .shadow(color: spikeColors[i], radius: selectedColor == i ? 4 : 0)
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(red: 0.05, green: 0.05, blue: 0.18))
+            }
 
             // ── Editor canvas ──
             GeometryReader { geo in
@@ -1001,7 +1024,7 @@ fileprivate func drawObstacles(ctx: GraphicsContext, size: CGSize, engine: GDEng
 
         case .ceilSpike:
             // Inverted triangle (tip points down)
-            let col = Color(red: 1, green: 0.2, blue: 0.5)
+            let col = spikeColors[obs.colorIdx % spikeColors.count]
             let triPath = Path { p in
                 p.move(to: CGPoint(x: sr.minX,  y: sr.minY))  // top-left
                 p.addLine(to: CGPoint(x: sr.maxX,  y: sr.minY))  // top-right
@@ -1061,6 +1084,29 @@ fileprivate func drawObstacles(ctx: GraphicsContext, size: CGSize, engine: GDEng
             }
             ctx.fill(chevron, with: .color(padCol))
             ctx.stroke(chevron, with: .color(.white.opacity(0.7)), lineWidth: 1)
+
+        case .pit:
+            break  // rendered as a floor gap, not a drawable obstacle
+
+        case .speedUp:
+            let speedCol = Color(red: 1, green: 0.7, blue: 0)
+            ctx.stroke(Path(sr), with: .color(speedCol), lineWidth: 2.5)
+            ctx.drawLayer { c in
+                c.opacity = 0.25
+                c.fill(Path(sr), with: .color(speedCol))
+            }
+            let lbl = Text("2×").font(.system(size: 11, weight: .bold)).foregroundColor(speedCol)
+            ctx.draw(lbl, at: CGPoint(x: sr.midX, y: sr.midY), anchor: .center)
+
+        case .slowDown:
+            let slowCol = Color(red: 0.3, green: 0.6, blue: 1)
+            ctx.stroke(Path(sr), with: .color(slowCol), lineWidth: 2.5)
+            ctx.drawLayer { c in
+                c.opacity = 0.25
+                c.fill(Path(sr), with: .color(slowCol))
+            }
+            let lbl2 = Text("½").font(.system(size: 11, weight: .bold)).foregroundColor(slowCol)
+            ctx.draw(lbl2, at: CGPoint(x: sr.midX, y: sr.midY), anchor: .center)
         }
     }
 }
@@ -1386,7 +1432,7 @@ fileprivate func drawObstacleShape(ctx: GraphicsContext, obs: GDObstacle, sr: CG
         ctx.fill(path, with: .color(col))
         ctx.stroke(path, with: .color(.white.opacity(0.4)), lineWidth: 1)
     case .ceilSpike:
-        let col = Color(red: 1, green: 0.2, blue: 0.5)
+        let col = spikeColors[obs.colorIdx % spikeColors.count]
         let path = Path { p in
             p.move(to: CGPoint(x: sr.minX, y: sr.minY))
             p.addLine(to: CGPoint(x: sr.maxX, y: sr.minY))
@@ -1430,5 +1476,11 @@ fileprivate func drawObstacleShape(ctx: GraphicsContext, obs: GDObstacle, sr: CG
         }
         let lbl2 = Text("½").font(.system(size: 11, weight: .bold)).foregroundColor(slowCol)
         ctx.draw(lbl2, at: CGPoint(x: sr.midX, y: sr.midY), anchor: .center)
+    case .pit:
+        let pitCol = Color(red: 0.8, green: 0.1, blue: 0.1)
+        ctx.fill(Path(sr), with: .color(pitCol.opacity(0.7)))
+        ctx.stroke(Path(sr), with: .color(pitCol), lineWidth: 2)
+        let pitLbl = Text("PIT").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundColor(.red)
+        ctx.draw(pitLbl, at: CGPoint(x: sr.midX, y: sr.midY), anchor: .center)
     }
 }
