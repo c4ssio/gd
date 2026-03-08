@@ -1,777 +1,1292 @@
 import SwiftUI
 
 // MARK: - Constants
-private let brickCols  = 9
-private let brickGap:  CGFloat = 4
-private let brickH:    CGFloat = 16
-private let brickOffY: CGFloat = 44
-private let ballR:     CGFloat = 7
-private let baseSpeed: CGFloat = 4.5
-private let paddleH:   CGFloat = 10
-private let defPaddleW:CGFloat = 90
-private let puW:       CGFloat = 28
-private let puH:       CGFloat = 18
-private let puSpeed:   CGFloat = 1.8
+fileprivate let playerW:    CGFloat = 30
+fileprivate let playerH:    CGFloat = 30
+fileprivate let gravity:    CGFloat = 0.65
+fileprivate let jumpVel:    CGFloat = -13.5
+fileprivate let scrollSpd:  CGFloat = 5
+fileprivate let levelLen:   CGFloat = 6500
+fileprivate let groundH:    CGFloat = 50
 
-// MARK: - Brick color palette
-struct BrickStyle { let fill: Color; let pts: Int }
-private let palette: [BrickStyle] = [
-    BrickStyle(fill: Color(red:1,   green:0,    blue:0.5),  pts:50),
-    BrickStyle(fill: Color(red:1,   green:0.4,  blue:0),    pts:40),
-    BrickStyle(fill: Color(red:1,   green:0.9,  blue:0),    pts:30),
-    BrickStyle(fill: Color(red:0,   green:1,    blue:0.53), pts:20),
-    BrickStyle(fill: Color(red:0,   green:0.96, blue:1),    pts:10),
-    BrickStyle(fill: Color(red:0.73,green:0.27, blue:1),    pts:35),
-    BrickStyle(fill: Color(red:1,   green:0.53, blue:0.67), pts:25),
-]
+// MARK: - Types
 
-// MARK: - Models
-struct Brick {
-    var alive  = true
-    var hp:    Int
-    let row:   Int
-    let col:   Int
-    let styleIdx: Int
-    var style: BrickStyle { palette[styleIdx % palette.count] }
+enum GDState  { case menu, playing, dead, victory }
+enum GameMode { case cube, ship }
+
+enum ObstacleKind { case spike, block, platform, ceilSpike, jumpPad, portal }
+
+struct GDObstacle {
+    var rect: CGRect
+    var kind: ObstacleKind
+    var colorIdx: Int
 }
 
-struct Ball {
-    var pos:      CGPoint
-    var vel:      CGPoint
-    var launched: Bool
-    var primary:  Bool
-    var color:    Color = .yellow
+struct GDParticle {
+    var pos: CGPoint
+    var vel: CGPoint
+    var life: CGFloat
+    var maxLife: CGFloat
+    var color: Color
+    var size: CGFloat
 }
 
-struct PowerUp {
-    var pos:  CGPoint
-    var kind: Kind
-    var col:  Int
-    enum Kind: CaseIterable {
-        case laser, triball, wide, speed
-        var label: String {
-            switch self { case .laser:"ZAP"; case .triball:"×3"; case .wide:"↔"; case .speed:"▶▶" }
-        }
-        var color: Color {
-            switch self {
-            case .laser:   Color(red:1,   green:0.27, blue:0)
-            case .triball: Color(red:0,   green:0.4,  blue:1)
-            case .wide:    Color(red:0.67,green:0,    blue:1)
-            case .speed:   Color(red:0,   green:1,    blue:0.53)
-            }
-        }
-    }
+// MARK: - Star (background parallax)
+
+struct GDStar {
+    var worldX: CGFloat   // position in a virtual world wider than screen
+    var y: CGFloat
+    var radius: CGFloat
+    var brightness: CGFloat
+    var parallax: CGFloat  // 0..1, lower = further back = slower
 }
 
-struct Laser    { var x, y: CGFloat; var col: Int }
-struct Particle { var pos, vel: CGPoint; var life, size: CGFloat; var color: Color }
+// MARK: - Engine
 
-// MARK: - Level definitions
-private struct BrickDef { let r,c,hp,ci: Int }
+class GDEngine: ObservableObject {
+    @Published var state: GDState = .menu
+    @Published var attempts: Int = 0
 
-private func levelDefs(_ lvl: Int) -> [BrickDef] {
-    var out: [BrickDef] = []
-    func add(_ r:Int,_ c:Int,_ hp:Int,_ ci:Int) {
-        guard c >= 0, c < brickCols else { return }
-        out.append(BrickDef(r:r,c:c,hp:hp,ci:ci))
-    }
-    switch lvl {
-    case 1:
-        for r in 0..<5 { for c in 0..<brickCols { add(r,c,r<2 ? 2:1,r) } }
-    case 2:
-        for r in 0..<5 {
-            let n = (r+1)*2-1; let s = (brickCols-n)/2
-            for c in s..<s+n { add(r,c,r==0 ? 2:1,r) }
-        }
-    case 3:
-        let cx = 4
-        for r in 0..<7 {
-            let half = r<=3 ? r : 6-r
-            for c in (cx-half)...(cx+half) {
-                let edge = c==cx-half||c==cx+half||r==0||r==6
-                add(r,c,edge ? 2:1,edge ? 0:3)
-            }
-        }
-    case 4:
-        for r in 0..<6 { for c in 0..<brickCols { if (r+c)%2==0 { add(r,c,r<2 ? 2:1,r%palette.count) } } }
-    case 5:
-        for r in 0..<6 {
-            for c in 0..<brickCols {
-                let gate = r==5 && (c==3||c==4||c==5)
-                if (r==0||r==5||c==0||c==brickCols-1) && !gate { add(r,c,2,r==0 ? 0:1) }
-            }
-        }
-        add(2,4,3,5); add(3,4,3,5)
-    case 6:
-        for r in 0..<6 { var c = r%2; while c < brickCols { add(r,c,2,r%palette.count); c+=2 } }
-    case 7:
-        for r in 0..<7 { for c in 0..<brickCols {
-            let v = c==4, h = r==3
-            if v||h { add(r,c,(v&&h) ? 3:2,(v&&h) ? 5:v ? 0:2) }
-        } }
-    case 8:
-        for r in 0..<7 { for c in 0..<brickCols { add(r,c,r<4 ? 2:1,r%palette.count) } }
-    default: break
-    }
-    return out
-}
+    // Player
+    var playerX:   CGFloat = 120
+    var playerY:   CGFloat = 0
+    var velY:      CGFloat = 0
+    var onGround:  Bool = false
+    var cubeAngle: CGFloat = 0      // degrees, updated while scrolling
+    var mode:      GameMode = .cube
+    var holding:   Bool = false     // tap held (ship thrust)
 
-// MARK: - Game
-class Game: ObservableObject {
-    @Published var bricks:    [Brick]    = []
-    @Published var balls:     [Ball]     = []
-    @Published var powerups:  [PowerUp]  = []
-    @Published var lasers:    [Laser]    = []
-    @Published var particles: [Particle] = []
-    @Published var paddleX:   CGFloat    = 0
-    @Published var paddleW:   CGFloat    = defPaddleW
-    @Published var score  = 0
-    @Published var lives  = 3
-    @Published var level  = 1
-    @Published var phase: Phase = .menu
-    @Published var wideTimer  = 0
-    @Published var speedTimer = 0
+    // World
+    var scrollX: CGFloat = 0
+    var progress: CGFloat = 0
 
-    enum Phase { case menu, playing, levelClear, won, lost }
+    // Obstacles & particles
+    var obstacles: [GDObstacle] = []
+    var particles: [GDParticle] = []
+    var stars: [GDStar] = []
 
-    private(set) var size: CGSize = .zero
+    // Floor gaps: world-x ranges where floor is absent
+    var floorGaps: [(start: CGFloat, end: CGFloat)] = []
 
-    var brickW:  CGFloat { (size.width - brickGap * CGFloat(brickCols+1)) / CGFloat(brickCols) }
-    var brickOX: CGFloat { brickGap }
-    var paddleY: CGFloat { size.height - 60 }
+    // Screen shake
+    var shakeTimer: CGFloat = 0
+    var shakeX: CGFloat = 0
+    var shakeY: CGFloat = 0
 
-    func brickRect(_ b: Brick) -> CGRect {
-        CGRect(x: brickOX + CGFloat(b.col)*(brickW+brickGap),
-               y: brickOffY + CGFloat(b.row)*(brickH+brickGap),
-               width: brickW, height: brickH)
+    // Timers
+    var deathFlash: CGFloat = 0
+    var deathPause: CGFloat = 0
+    var victoryTimer: CGFloat = 0
+    var lastDate: Date = Date()
+
+    // Set once from size
+    var groundY: CGFloat = 400
+    private var sizeSet = false
+
+    // MARK: Setup
+
+    func setup(size: CGSize) {
+        guard !sizeSet else { return }
+        sizeSet = true
+        groundY = size.height - groundH
+        playerY = groundY - playerH
+        buildLevel()
+        buildStars(size: size)
     }
 
-    func currentSpeed() -> CGFloat {
-        let s = baseSpeed + CGFloat(level-1)*0.35
-        return speedTimer > 0 ? s*1.65 : s
-    }
-
-    func startGame(in sz: CGSize) {
-        size = sz; score = 0; lives = 3; level = 1
-        beginLevel()
-    }
-
-    private func beginLevel() {
-        paddleW = defPaddleW; paddleX = size.width/2
-        wideTimer = 0; speedTimer = 0
-        powerups = []; lasers = []
-        bricks = levelDefs(level).map { Brick(hp:$0.hp, row:$0.r, col:$0.c, styleIdx:$0.ci) }
-        resetBall()
-        phase = .playing
-    }
-
-    private func resetBall() {
-        balls = [Ball(pos: CGPoint(x:paddleX, y:paddleY-ballR-2),
-                      vel: .zero, launched: false, primary: true, color: .yellow)]
-    }
-
-    func launch() {
-        guard let i = balls.indices.first(where: { !balls[$0].launched }) else { return }
-        let angle = -CGFloat.pi/2 + CGFloat.random(in: -0.4...0.4)
-        let s = currentSpeed()
-        balls[i].vel = CGPoint(x: cos(angle)*s, y: sin(angle)*s)
-        balls[i].launched = true
-    }
-
-    func movePaddle(to x: CGFloat) {
-        paddleX = x.clamped(to: paddleW/2...size.width-paddleW/2)
-    }
-
-    func update() {
-        guard phase == .playing else { return }
-        tickTimers(); snapUnlaunched(); moveBalls()
-        movePowerups(); moveLasers(); tickParticles()
-        if bricks.allSatisfy({ !$0.alive }) { endLevel() }
-    }
-
-    private func tickTimers() {
-        if wideTimer > 0 { wideTimer -= 1
-            if wideTimer == 0 { let cx=paddleX; paddleW=defPaddleW; paddleX=cx.clamped(to:paddleW/2...size.width-paddleW/2) }
-        }
-        if speedTimer > 0 { speedTimer -= 1; if speedTimer == 0 { normalizeBalls() } }
-    }
-
-    private func snapUnlaunched() {
-        if let i = balls.indices.first(where:{ !balls[$0].launched }) {
-            balls[i].pos = CGPoint(x: paddleX, y: paddleY-ballR-2)
+    func buildStars(size: CGSize) {
+        stars = []
+        let worldW = size.width * 4  // tile across 4 screen-widths
+        let skyH   = size.height * 0.75
+        for i in 0..<90 {
+            let seed = CGFloat(i * 6791 + 3)
+            let wx   = seed.truncatingRemainder(dividingBy: worldW)
+            let y    = (seed * 1.7).truncatingRemainder(dividingBy: skyH) + 4
+            let r    = CGFloat.random(in: 0.8...2.4)
+            let br   = CGFloat.random(in: 0.3...1.0)
+            let par  = CGFloat.random(in: 0.05...0.25)
+            stars.append(GDStar(worldX: wx, y: y, radius: r, brightness: br, parallax: par))
         }
     }
 
-    private func moveBalls() {
-        var remove: [Int] = []
-        for i in balls.indices {
-            guard balls[i].launched else { continue }
-            balls[i].pos.x += balls[i].vel.x
-            balls[i].pos.y += balls[i].vel.y
-            wallBounce(i)
-            if balls[i].pos.y - ballR > size.height {
-                if balls[i].primary { loseLife(); return }
-                else { remove.append(i) }
-                continue
-            }
-            paddleBounce(i); brickCollide(i)
+    func buildLevel() {
+        obstacles = []
+        floorGaps = []
+        let gY = groundY
+
+        // Ground spike (cyan, triangle)
+        func spike(_ x: CGFloat, _ ci: Int = 0) {
+            obstacles.append(GDObstacle(
+                rect: CGRect(x: x + 2, y: gY - 30, width: 26, height: 29),
+                kind: .spike, colorIdx: ci))
         }
-        for i in remove.reversed() { balls.remove(at: i) }
-    }
-
-    private func wallBounce(_ i: Int) {
-        var b = balls[i]
-        if b.pos.x-ballR <= 0          { b.pos.x=ballR;             b.vel.x=abs(b.vel.x) }
-        if b.pos.x+ballR >= size.width { b.pos.x=size.width-ballR;  b.vel.x = -abs(b.vel.x) }
-        if b.pos.y-ballR <= 0          { b.pos.y=ballR;             b.vel.y=abs(b.vel.y) }
-        balls[i] = b
-    }
-
-    private func paddleBounce(_ i: Int) {
-        let b = balls[i]; let py = paddleY
-        guard b.vel.y > 0,
-              b.pos.y+ballR >= py-paddleH/2, b.pos.y-ballR <= py+paddleH/2,
-              b.pos.x >= paddleX-paddleW/2,  b.pos.x <= paddleX+paddleW/2 else { return }
-        balls[i].pos.y = py-paddleH/2-ballR
-        balls[i].vel.y = -abs(b.vel.y)
-        let rel = (b.pos.x-paddleX)/(paddleW/2)
-        balls[i].vel.x = rel*baseSpeed*1.2
-        normalise(i)
-    }
-
-    private func brickCollide(_ i: Int) {
-        let br = CGRect(x:balls[i].pos.x-ballR, y:balls[i].pos.y-ballR, width:ballR*2, height:ballR*2)
-        for j in bricks.indices {
-            guard bricks[j].alive else { continue }
-            let rect = brickRect(bricks[j])
-            guard br.intersects(rect) else { continue }
-            bricks[j].hp -= 1
-            if bricks[j].hp <= 0 {
-                bricks[j].alive = false
-                score += bricks[j].style.pts * level
-                spawn(at: CGPoint(x:rect.midX,y:rect.midY), color: bricks[j].style.fill)
-                tryDrop(bricks[j])
-            }
-            let ol = br.maxX-rect.minX, or_ = rect.maxX-br.minX
-            let ot = br.maxY-rect.minY, ob   = rect.maxY-br.minY
-            if min(ot,ob) < min(ol,or_) { balls[i].vel.y *= -1 } else { balls[i].vel.x *= -1 }
-            break
+        // Ceiling spike (inverted, hangs from top + some offset)
+        func cSpike(_ x: CGFloat, _ y: CGFloat) {
+            obstacles.append(GDObstacle(
+                rect: CGRect(x: x + 2, y: y, width: 26, height: 29),
+                kind: .ceilSpike, colorIdx: 1))
         }
-    }
-
-    private func movePowerups() {
-        for i in powerups.indices.reversed() {
-            powerups[i].pos.y += puSpeed
-            let pu = powerups[i]
-            if pu.pos.y+puH >= paddleY-paddleH/2,
-               pu.pos.x+puW >= paddleX-paddleW/2,
-               pu.pos.x     <= paddleX+paddleW/2 { collect(pu); powerups.remove(at: i); continue }
-            if pu.pos.y > size.height { powerups.remove(at: i) }
+        // Solid block
+        func block(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ ci: Int = 1) {
+            obstacles.append(GDObstacle(
+                rect: CGRect(x: x, y: y, width: w, height: h),
+                kind: .block, colorIdx: ci))
         }
+        // Thin platform
+        func plat(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat) {
+            obstacles.append(GDObstacle(
+                rect: CGRect(x: x, y: y, width: w, height: 12),
+                kind: .platform, colorIdx: 2))
+        }
+        // Jump pad (on ground)
+        func pad(_ x: CGFloat) {
+            obstacles.append(GDObstacle(
+                rect: CGRect(x: x, y: gY - 18, width: 36, height: 18),
+                kind: .jumpPad, colorIdx: 0))
+        }
+        // Floor gap
+        func pit(_ start: CGFloat, _ end: CGFloat) {
+            floorGaps.append((start: start, end: end))
+        }
+        // Mode-change portal (tall rectangle, pass-through)
+        func portal(_ x: CGFloat) {
+            obstacles.append(GDObstacle(
+                rect: CGRect(x: x, y: 20, width: 24, height: gY - 20),
+                kind: .portal, colorIdx: 0))
+        }
+        // Tunnel wall for ship section (ceiling or floor block the passage)
+        func twall(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) {
+            obstacles.append(GDObstacle(
+                rect: CGRect(x: x, y: y, width: w, height: h),
+                kind: .block, colorIdx: 2))
+        }
+
+        // ── Section 1: Tutorial — gentle single spikes ──────────── x 300–1150
+        spike(300); spike(480); spike(660); spike(840); spike(1020)
+
+        // ── Section 2: Double spikes + a jump pad ───────────────── x 1300–2100
+        for i in 0..<4 {
+            let bx = 1300 + CGFloat(i) * 200
+            spike(bx); spike(bx + 32)
+        }
+        pad(2000)   // teach the jump pad mechanic
+
+        // ── Section 3: Platforms + ceiling threat ───────────────── x 2300–3100
+        plat(2300, gY - 80,  150)
+        cSpike(2370, 30)
+        spike(2510)
+        plat(2600, gY - 130, 120)
+        cSpike(2640, 20)
+        plat(2820, gY - 80,  120)
+        spike(2980); spike(3012)
+
+        // ── Ship section: portal → narrow tunnel → return portal ─── x 3100–3300
+        portal(3100)  // cube → ship
+        // Tunnel: ceiling blocks force player to fly at mid-height
+        let tunnelY  = gY - 110   // ceiling of tunnel
+        let gapH: CGFloat = 80    // fly-through gap
+        twall(3140, 0,       180, tunnelY)            // upper wall (ceiling)
+        twall(3140, tunnelY + gapH, 180, gY - (tunnelY + gapH))  // lower wall (floor plug)
+        twall(3240, 0,       180, tunnelY - 20)       // narrower 2nd tunnel ceiling
+        twall(3240, tunnelY + gapH - 20, 180, 60)    // lower wall
+        portal(3290)  // ship → cube
+
+        // ── Section 4: Death pits ────────────────────────────────── x 3500–4300
+        // Floor gaps — player must jump over them
+        pit(3550, 3670)         // first pit
+        spike(3710)             // spike right after pit edge
+        pit(3900, 4020)         // second pit, wider
+        pad(4030)               // jump pad to clear next section
+        pit(4250, 4330)         // tight pit
+
+        // ── Section 5: Block maze + ceiling spikes ───────────────── x 4500–5500
+        block(4500, gY - 60,  60,  60, 1)
+        spike(4610); spike(4642)
+        block(4750, gY - 90,  60,  90, 2)
+        cSpike(4770, 15)
+        spike(4860); spike(4892); spike(4924)
+        block(5000, gY - 60,  60,  60, 1)
+        spike(5110)
+        plat(5250, gY - 110, 120)
+        cSpike(5280, 25)
+        spike(5400); spike(5432)
+
+        // ── Section 6: Final gauntlet ────────────────────────────── x 5700–6400
+        for i in 0..<6 {
+            let bx = 5700 + CGFloat(i) * 130
+            spike(bx, i % 3)
+            if i % 2 == 0 { spike(bx + 32, (i+1) % 3) }
+        }
+        pit(6300, 6400)
+        spike(6430); spike(6462); spike(6494)
+        pad(6380)
     }
 
-    private func moveLasers() {
-        for i in lasers.indices.reversed() {
-            lasers[i].y -= 16
-            let beam = lasers[i]
-            for j in bricks.indices {
-                guard bricks[j].alive, bricks[j].col == beam.col else { continue }
-                let rect = brickRect(bricks[j])
-                if beam.y < rect.maxY && beam.y > rect.minY-8 {
-                    bricks[j].hp -= 1
-                    if bricks[j].hp <= 0 {
-                        bricks[j].alive = false
-                        score += bricks[j].style.pts * level
-                        spawn(at: CGPoint(x:rect.midX,y:rect.midY), color: bricks[j].style.fill)
-                        tryDrop(bricks[j])
-                    }
+    // MARK: Input
+
+    func tap() {
+        switch state {
+        case .menu:
+            state = .playing
+            attempts = 1
+        case .playing:
+            if mode == .cube {
+                if onGround {
+                    velY = jumpVel
+                    onGround = false
                 }
             }
-            if lasers[i].y < 0 { lasers.remove(at: i) }
+            // Ship thrust is handled via holding flag
+        case .dead:
+            break  // auto-restart via deathPause
+        case .victory:
+            restartGame()
         }
     }
 
-    private func tickParticles() {
-        for i in particles.indices.reversed() {
+    func touchDown() {
+        if state == .playing { holding = true }
+    }
+
+    func touchUp() {
+        holding = false
+    }
+
+    // MARK: Game loop
+
+    func tick(size: CGSize) {
+        setup(size: size)
+
+        let now = Date()
+        let rawDt = now.timeIntervalSince(lastDate)
+        lastDate = now
+        let dt = CGFloat(min(rawDt, 0.05))
+
+        switch state {
+        case .menu: return
+        case .dead:
+            updateParticles(dt: dt)
+            deathFlash = max(0, deathFlash - dt * 2.5)
+            deathPause -= dt
+            if deathPause <= 0 { restartGame() }
+            return
+        case .victory:
+            victoryTimer += dt
+            updateParticles(dt: dt)
+            return
+        case .playing: break
+        }
+
+        // Screen shake decay
+        if shakeTimer > 0 {
+            shakeTimer -= dt
+            let t = shakeTimer * 45
+            shakeX = sin(t) * 7 * (shakeTimer / 0.35)
+            shakeY = cos(t * 1.3) * 5 * (shakeTimer / 0.35)
+        } else {
+            shakeX = 0; shakeY = 0
+        }
+
+        // --- Physics ---
+        if mode == .ship {
+            // Ship: hold = thrust up, release = fall
+            let thrust: CGFloat = holding ? -1.1 : 0.0
+            velY += gravity * 0.55 + thrust
+            velY = max(-9, min(9, velY))  // clamp ship speed
+        } else {
+            velY += gravity
+        }
+        playerY += velY
+        scrollX += scrollSpd
+        cubeAngle = scrollX * 0.09  // slow rotation as level scrolls
+        progress = min(1, scrollX / levelLen)
+
+        // Ground — only if player is NOT over a floor gap
+        let floorY = groundY - playerH
+        let pLeftWorld  = scrollX + playerX
+        let pRightWorld = scrollX + playerX + playerW
+        let overGap = floorGaps.contains { pRightWorld > $0.start && pLeftWorld < $0.end }
+        if !overGap && playerY >= floorY {
+            playerY = floorY
+            velY = 0
+            onGround = true
+        } else if overGap {
+            onGround = false
+        } else {
+            onGround = false
+        }
+
+        // Ceiling kill
+        if playerY < -playerH {
+            die(size: size); return
+        }
+
+        // --- Obstacle collision ---
+        let pRect = CGRect(x: playerX, y: playerY, width: playerW, height: playerH)
+
+        for obs in obstacles {
+            let sx = obs.rect.minX - scrollX
+            let sRect = CGRect(x: sx, y: obs.rect.minY,
+                               width: obs.rect.width, height: obs.rect.height)
+
+            guard pRect.intersects(sRect) else { continue }
+
+            switch obs.kind {
+            case .spike, .ceilSpike:
+                die(size: size); return
+
+            case .portal:
+                // Switch modes
+                if mode == .cube {
+                    mode = .ship
+                    velY = min(velY, -2)  // slight upward nudge on entry
+                } else {
+                    mode = .cube
+                }
+                continue  // don't die or land, just pass through
+
+            case .jumpPad:
+                // Bounce — only trigger if coming down onto it
+                let prevBottom = playerY + playerH - velY
+                if prevBottom <= sRect.minY + 6 && velY >= 0 {
+                    playerY = sRect.minY - playerH
+                    velY = jumpVel * 1.35   // ~18% stronger than normal jump
+                    onGround = false
+                    spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH),
+                                   count: 10, speed: 2...5, life: 0.5,
+                                   colors: [.yellow, Color(red:1,green:0.8,blue:0), .white])
+                }
+
+            case .block, .platform:
+                // Land on top if coming down
+                let prevBottom = playerY + playerH - velY
+                if prevBottom <= sRect.minY + 4 && velY >= 0 {
+                    playerY = sRect.minY - playerH
+                    velY = 0
+                    onGround = true
+                } else {
+                    // Side / bottom collision = death
+                    die(size: size); return
+                }
+            }
+        }
+
+        // Fall off world
+        if playerY > groundY + 80 {
+            die(size: size); return
+        }
+
+        // Victory
+        if scrollX >= levelLen {
+            state = .victory
+            victoryTimer = 0
+            spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH/2),
+                           count: 60, speed: 3...10, life: 2.5,
+                           colors: [.yellow, .cyan, Color(red:1,green:0.5,blue:0), .white,
+                                    Color(red:0.8,green:0,blue:1)])
+        }
+
+        updateParticles(dt: dt)
+    }
+
+    func die(size: CGSize) {
+        state = .dead
+        deathFlash = 1.0
+        deathPause = 1.2
+        shakeTimer = 0.35
+        attempts += 1
+        spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH/2),
+                       count: 40, speed: 2...11, life: 1.0,
+                       colors: [.cyan, .green, Color(red:0,green:1,blue:0.5), .yellow, .white])
+    }
+
+    func restartGame() {
+        playerY = groundY - playerH
+        velY = 0
+        scrollX = 0
+        progress = 0
+        onGround = false
+        mode = .cube
+        holding = false
+        particles = []
+        deathFlash = 0
+        shakeTimer = 0
+        shakeX = 0; shakeY = 0
+        state = .playing
+    }
+
+    // MARK: Particles
+
+    func spawnParticles(at pos: CGPoint, count: Int, speed: ClosedRange<CGFloat>,
+                        life: CGFloat, colors: [Color]) {
+        for _ in 0..<count {
+            let angle = CGFloat.random(in: 0..<CGFloat.pi * 2)
+            let spd   = CGFloat.random(in: speed)
+            particles.append(GDParticle(
+                pos: pos,
+                vel: CGPoint(x: cos(angle) * spd, y: sin(angle) * spd),
+                life: life, maxLife: life,
+                color: colors.randomElement()!,
+                size: CGFloat.random(in: 3...8)))
+        }
+    }
+
+    func updateParticles(dt: CGFloat) {
+        for i in particles.indices {
             particles[i].pos.x += particles[i].vel.x
             particles[i].pos.y += particles[i].vel.y
-            particles[i].vel.y += 0.1
-            particles[i].life  -= 0.04
-            if particles[i].life <= 0 { particles.remove(at: i) }
+            particles[i].vel.y += 0.15
+            particles[i].life  -= dt
         }
+        particles.removeAll { $0.life <= 0 }
     }
 
-    private func endLevel() {
-        powerups=[]; lasers=[]
-        phase = level >= 8 ? .won : .levelClear
+    // MARK: - Editor
+
+    var editorOpen        = false
+    var editorScrollX:    CGFloat = 0
+    var selectedKind:     ObstacleKind = .spike
+    var editorEraseMode   = false
+    var customObstacles:  [GDObstacle] = []
+
+    func openEditor() {
+        // Rebuild clean built-in level, preserve custom
+        buildLevel()
+        editorOpen = true
     }
 
-    private func loseLife() {
-        lives -= 1; powerups=[]; lasers=[]
-        if lives <= 0 { phase = .lost }
-        else { paddleW=defPaddleW; paddleX=size.width/2; wideTimer=0; resetBall() }
+    func closeEditor() {
+        editorOpen = false
     }
 
-    private func spawn(at pt: CGPoint, color: Color) {
-        for _ in 0..<12 {
-            let a = CGFloat.random(in:0...CGFloat.pi*2)
-            let s = CGFloat.random(in:1.5...5)
-            particles.append(Particle(pos:pt, vel:CGPoint(x:cos(a)*s,y:sin(a)*s),
-                                      life:1, size:CGFloat.random(in:2...5), color:color))
-        }
+    func editorTest() {
+        // Merge custom obstacles into main level then play
+        obstacles.append(contentsOf: customObstacles)
+        editorOpen = false
+        restartGame()
     }
 
-    private func tryDrop(_ b: Brick) {
-        guard Double.random(in:0...1) < 0.3 else { return }
-        let rect = brickRect(b)
-        let kind = PowerUp.Kind.allCases.randomElement()!
-        powerups.append(PowerUp(pos:CGPoint(x:rect.midX-puW/2, y:rect.minY), kind:kind, col:b.col))
+    func editorClear() {
+        customObstacles = []
     }
 
-    private func collect(_ pu: PowerUp) {
-        switch pu.kind {
-        case .wide:
-            let cx = paddleX
-            paddleW = min(defPaddleW*2, paddleW+55)
-            paddleX = cx.clamped(to: paddleW/2...size.width-paddleW/2)
-            wideTimer = 600
-        case .triball:
-            let ref = balls.first(where:{ $0.launched }) ?? balls[0]
-            let spd = currentSpeed()
-            let colors: [Color] = [.cyan, Color(red:1,green:0,blue:0.5), .green, Color(red:0.73,green:0.27,blue:1)]
-            for i in 0..<2 {
-                let angle = -CGFloat.pi/2 + (i==0 ? -0.6 : 0.6)
-                balls.append(Ball(pos:ref.pos, vel:CGPoint(x:cos(angle)*spd, y:sin(angle)*spd),
-                                  launched:true, primary:false,
-                                  color:colors[(balls.count+i) % colors.count]))
+    /// Place or remove at a tapped canvas position.
+    func editorAction(at pos: CGPoint, size: CGSize) {
+        let worldX = pos.x + editorScrollX
+        let gY     = groundY
+
+        if editorEraseMode {
+            // Remove the first custom obstacle whose rect contains tap
+            customObstacles.removeAll { obs in
+                obs.rect.insetBy(dx: -10, dy: -10).contains(CGPoint(x: worldX, y: pos.y))
             }
-        case .laser:
-            let lx = brickOX + CGFloat(pu.col)*(brickW+brickGap) + brickW/2
-            lasers.append(Laser(x:lx, y:paddleY, col:pu.col))
-        case .speed:
-            speedTimer = 480; normalizeBalls()
+            return
+        }
+
+        // Snap X to 40pt grid
+        let snappedX = (worldX / 40).rounded(.down) * 40
+        let obs: GDObstacle
+        switch selectedKind {
+        case .spike:
+            obs = GDObstacle(rect: CGRect(x: snappedX + 2, y: gY - 30, width: 26, height: 29),
+                             kind: .spike, colorIdx: 0)
+        case .block:
+            let ty = (pos.y / 40).rounded(.down) * 40
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: ty, width: 60, height: 60),
+                             kind: .block, colorIdx: 1)
+        case .platform:
+            let ty = (pos.y / 40).rounded(.down) * 40
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: ty, width: 120, height: 12),
+                             kind: .platform, colorIdx: 2)
+        case .ceilSpike:
+            obs = GDObstacle(rect: CGRect(x: snappedX + 2, y: 20, width: 26, height: 29),
+                             kind: .ceilSpike, colorIdx: 1)
+        case .jumpPad:
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: gY - 18, width: 36, height: 18),
+                             kind: .jumpPad, colorIdx: 0)
+        case .portal:
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: 20, width: 24, height: gY - 20),
+                             kind: .portal, colorIdx: 0)
+        }
+        customObstacles.append(obs)
+    }
+
+    func returnToEditor() {
+        // Rebuild built-in obstacles, keep custom, open editor
+        buildLevel()
+        particles = []
+        deathFlash = 0
+        editorOpen = true
+    }
+}
+
+// MARK: - ContentView (root switch)
+
+struct ContentView: View {
+    @StateObject private var engine = GDEngine()
+
+    var body: some View {
+        if engine.editorOpen {
+            EditorView(engine: engine)
+        } else {
+            GameView(engine: engine)
         }
     }
+}
 
-    private func normalise(_ i: Int) {
-        let s = hypot(balls[i].vel.x, balls[i].vel.y), t = currentSpeed()
-        guard s > 0 else { return }
-        balls[i].vel.x = balls[i].vel.x/s*t
-        balls[i].vel.y = balls[i].vel.y/s*t
+// MARK: - GameView
+
+struct GameView: View {
+    @ObservedObject var engine: GDEngine
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .bottom) {
+                TimelineView(.animation) { tl in
+                    Canvas { ctx, size in
+                        renderFrame(ctx: ctx, size: size, engine: engine)
+                    }
+                    .onChange(of: tl.date) { _ in
+                        engine.tick(size: geo.size)
+                    }
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in
+                            engine.touchDown()
+                            engine.tap()
+                        }
+                        .onEnded { _ in engine.touchUp() }
+                )
+
+                // "Edit Level" on menu, "Return to Editor" on dead/victory
+                if engine.state == .menu {
+                    Button("Edit Level") { engine.openEditor() }
+                        .buttonStyle(GDButtonStyle(color: .purple))
+                        .padding(.bottom, 20)
+                }
+                if engine.state == .dead || engine.state == .victory {
+                    Button("↩ Editor") { engine.returnToEditor() }
+                        .buttonStyle(GDButtonStyle(color: Color(red: 0.4, green: 0, blue: 0.8)))
+                        .padding(.bottom, 20)
+                }
+            }
+        }
+        .background(Color.black)
+        .ignoresSafeArea()
     }
-
-    private func normalizeBalls() { for i in balls.indices { normalise(i) } }
-
-    func nextLevel() { level += 1; beginLevel() }
-    func restart(in sz: CGSize) { size = sz; startGame(in: sz) }
 }
 
-// MARK: - Helpers
-extension Comparable {
-    func clamped(to r: ClosedRange<Self>) -> Self { max(r.lowerBound, min(r.upperBound, self)) }
+struct GDButtonStyle: ButtonStyle {
+    var color: Color
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 14, weight: .bold, design: .monospaced))
+            .foregroundColor(.white)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+            .background(color.opacity(configuration.isPressed ? 0.5 : 0.85))
+            .cornerRadius(8)
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.3), lineWidth: 1))
+    }
 }
 
-// MARK: - View
-struct ContentView: View {
-    @StateObject private var game = Game()
-    let timer = Timer.publish(every: 1/60, on: .main, in: .common).autoconnect()
+// MARK: - EditorView
 
-    // Title flicker state
-    @State private var titleOpacity: Double = 1.0
-    // Drag-vs-tap tracking (mirrors HTML touchMoved threshold of 4px)
-    @State private var dragMoved = false
+struct EditorView: View {
+    @ObservedObject var engine: GDEngine
+    @State private var scrollStart: CGFloat = 0
 
-    // MARK: body
+    let kindOptions: [(ObstacleKind, String)] = [
+        (.spike,    "▲ Spike"),
+        (.block,    "■ Block"),
+        (.platform, "— Plat"),
+        (.ceilSpike,"▼ C.Spike"),
+        (.jumpPad,  "⬆ Pad"),
+        (.portal,   "⬡ Portal"),
+    ]
+
     var body: some View {
         VStack(spacing: 0) {
-            titleHeader
-            hudBar
-
-            GeometryReader { geo in
-                ZStack {
-                    // Canvas background (slightly lighter than body — matches HTML #080f1e)
-                    Color(red:0.031, green:0.059, blue:0.118)
-
-                    Canvas { ctx, size in render(ctx:ctx, size:size) }
-
-                    // Overlays
-                    switch game.phase {
-                    case .menu:
-                        modal(title:"BRICK BREAKER", sub:"DRAG TO MOVE · TAP TO LAUNCH",
-                              btn:"START GAME", color:.cyan) { game.startGame(in: geo.size) }
-                    case .levelClear:
-                        let names = ["","CLASSIC","PYRAMID","DIAMOND","CHECKERBOARD","FORTRESS","HERRINGBONE","CROSS","GAUNTLET"]
-                        modal(title:"STAGE \(game.level) CLEAR!",
-                              sub:"\(names[min(game.level,8)]) COMPLETE · SCORE: \(game.score)",
-                              btn:"START STAGE \(game.level+1)", color:.cyan) { game.nextLevel() }
-                    case .won:
-                        modal(title:"YOU WIN!", sub:"ALL 8 STAGES · FINAL SCORE: \(game.score)",
-                              btn:"PLAY AGAIN", color:Color(red:1,green:0.9,blue:0)) { game.restart(in:geo.size) }
-                    case .lost:
-                        modal(title:"GAME OVER", sub:"SCORE: \(game.score)",
-                              btn:"PLAY AGAIN", color:Color(red:1,green:0,blue:0.5)) { game.restart(in:geo.size) }
-                    case .playing:
-                        EmptyView()
+            // ── Top toolbar: obstacle type picker ──
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    // Erase toggle
+                    Button(engine.editorEraseMode ? "✕ Erase ON" : "✕ Erase") {
+                        engine.editorEraseMode.toggle()
                     }
+                    .buttonStyle(GDButtonStyle(color: engine.editorEraseMode
+                        ? Color(red: 0.9, green: 0.1, blue: 0.1)
+                        : Color(red: 0.3, green: 0.1, blue: 0.4)))
+
+                    ForEach(kindOptions, id: \.1) { (kind, label) in
+                        Button(label) {
+                            engine.selectedKind = kind
+                            engine.editorEraseMode = false
+                        }
+                        .buttonStyle(GDButtonStyle(
+                            color: engine.selectedKind == kind && !engine.editorEraseMode
+                                ? Color(red: 0, green: 0.6, blue: 1)
+                                : Color(red: 0.15, green: 0.15, blue: 0.3)))
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+            .background(Color(red: 0.05, green: 0.05, blue: 0.18))
+
+            // ── Editor canvas ──
+            GeometryReader { geo in
+                Canvas { ctx, size in
+                    renderEditor(ctx: ctx, size: size, engine: engine)
                 }
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { v in
-                            if game.phase == .menu { game.startGame(in: geo.size) }
-                            // Mirror HTML touchMoved: only count as drag if moved > 4pt
-                            if abs(v.location.x - v.startLocation.x) > 4 { dragMoved = true }
-                            if dragMoved { game.movePaddle(to: v.location.x) }
+                            if abs(v.translation.width) > 10 || abs(v.translation.height) > 10 {
+                                engine.editorScrollX = max(0, scrollStart - v.translation.width)
+                            }
                         }
-                        .onEnded { _ in
-                            // Clean tap (no drag) → launch
-                            if !dragMoved && game.phase == .playing { game.launch() }
-                            dragMoved = false
+                        .onEnded { v in
+                            let dist = hypot(v.translation.width, v.translation.height)
+                            if dist < 10 {
+                                engine.editorAction(at: v.location, size: geo.size)
+                            } else {
+                                scrollStart = engine.editorScrollX
+                            }
                         }
                 )
-                .onReceive(timer) { _ in game.update() }
+                .onAppear { scrollStart = engine.editorScrollX }
             }
-            // Canvas border + outer glow matching .canvas-wrap
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color(red:0,green:0.96,blue:1).opacity(0.2), lineWidth:1)
-            )
-            .shadow(color: Color(red:0,green:0.96,blue:1).opacity(0.1), radius:30)
 
-            legendRow
-            footerView
+            // ── Bottom toolbar: actions ──
+            HStack(spacing: 12) {
+                Button("◀ Pan") { engine.editorScrollX = max(0, engine.editorScrollX - 200) }
+                    .buttonStyle(GDButtonStyle(color: Color(red:0.2,green:0.2,blue:0.4)))
+                Button("Pan ▶") { engine.editorScrollX += 200 }
+                    .buttonStyle(GDButtonStyle(color: Color(red:0.2,green:0.2,blue:0.4)))
+                Spacer()
+                Button("🗑 Clear Custom") { engine.editorClear() }
+                    .buttonStyle(GDButtonStyle(color: Color(red:0.6,green:0.1,blue:0.1)))
+                Button("▶ Test") { engine.editorTest() }
+                    .buttonStyle(GDButtonStyle(color: Color(red:0,green:0.6,blue:0.2)))
+                Button("✕ Close") { engine.closeEditor() }
+                    .buttonStyle(GDButtonStyle(color: Color(red:0.3,green:0.3,blue:0.3)))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(red: 0.05, green: 0.05, blue: 0.18))
         }
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(atmosphereBackground)
-        // Title flicker loop
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 5_700_000_000)
-                withAnimation(.linear(duration: 0.08)) { titleOpacity = 0.85 }
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                withAnimation(.linear(duration: 0.08)) { titleOpacity = 1.0 }
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                withAnimation(.linear(duration: 0.08)) { titleOpacity = 0.9 }
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                withAnimation(.linear(duration: 0.08)) { titleOpacity = 1.0 }
-                try? await Task.sleep(nanoseconds: 20_000_000)
+        .background(Color.black)
+        .ignoresSafeArea(edges: .bottom)
+    }
+}
+
+// MARK: - Renderer
+
+fileprivate func renderFrame(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
+    // Synthwave background
+    drawBackground(ctx: ctx, size: size)
+    drawStars(ctx: ctx, size: size, engine: engine)
+
+    // World content (apply screen shake offset via drawLayer)
+    ctx.drawLayer { wc in
+        wc.concatenate(CGAffineTransform(translationX: engine.shakeX, y: engine.shakeY))
+        drawGround(ctx: wc, size: size, engine: engine)
+        drawObstacles(ctx: wc, size: size, engine: engine)
+        if engine.state == .playing || engine.state == .menu {
+            if engine.mode == .ship {
+                drawShip(ctx: wc, engine: engine)
+            } else {
+                drawPlayer(ctx: wc, engine: engine)
             }
         }
+        drawParticles(ctx: wc, engine: engine)
     }
 
-    // MARK: - Atmospheric background (body::before radial glows + body::after scanlines)
-    private var atmosphereBackground: some View {
-        GeometryReader { geo in
-            ZStack {
-                // Base dark fill
-                Color(red:0.02,green:0.04,blue:0.08)
-
-                // body::before — two corner radial glows
-                Canvas { ctx, size in
-                    // Cyan glow top-left (20%, 20%)
-                    let cyanCenter = CGPoint(x: size.width*0.2, y: size.height*0.2)
-                    let cyanRadius = max(size.width, size.height) * 0.6
-                    ctx.fill(
-                        Path(ellipseIn: CGRect(x: cyanCenter.x-cyanRadius, y: cyanCenter.y-cyanRadius,
-                                               width: cyanRadius*2, height: cyanRadius*2)),
-                        with: .radialGradient(
-                            Gradient(colors: [Color(red:0,green:0.96,blue:1,opacity:0.06), .clear]),
-                            center: cyanCenter,
-                            startRadius: 0, endRadius: cyanRadius)
-                    )
-                    // Pink glow bottom-right (80%, 80%)
-                    let pinkCenter = CGPoint(x: size.width*0.8, y: size.height*0.8)
-                    let pinkRadius = max(size.width, size.height) * 0.6
-                    ctx.fill(
-                        Path(ellipseIn: CGRect(x: pinkCenter.x-pinkRadius, y: pinkCenter.y-pinkRadius,
-                                               width: pinkRadius*2, height: pinkRadius*2)),
-                        with: .radialGradient(
-                            Gradient(colors: [Color(red:1,green:0,blue:0.5,opacity:0.06), .clear]),
-                            center: pinkCenter,
-                            startRadius: 0, endRadius: pinkRadius)
-                    )
-                }
-
-                // body::after — scanline stripe overlay
-                Canvas { ctx, size in
-                    var y: CGFloat = 3
-                    while y < size.height {
-                        ctx.fill(Path(CGRect(x:0, y:y, width:size.width, height:1)),
-                                 with:.color(.black.opacity(0.15)))
-                        y += 4
-                    }
-                }
-                .allowsHitTesting(false)
-            }
-        }
-        .ignoresSafeArea()
-    }
-
-    // MARK: - Chrome views
-
-    private var titleHeader: some View {
-        Text("BRICK BREAKER")
-            .font(.system(size: 22, weight: .black, design: .monospaced))
-            .tracking(5)
-            .foregroundColor(Color(red:0, green:0.96, blue:1))
-            .shadow(color: Color(red:0, green:0.96, blue:1), radius: 10)
-            .shadow(color: Color(red:0, green:0.96, blue:1).opacity(0.4), radius: 20)
-            .opacity(titleOpacity)
-            .padding(.bottom, 5)
-    }
-
-    private var hudBar: some View {
-        HStack(spacing: 32) {
-            hudItem("SCORE", "\(game.score)")
-            hudItem("LEVEL", "\(game.level)")
-            hudItem("LIVES", String(repeating:"♥ ", count:max(0,game.lives)).trimmingCharacters(in:.whitespaces))
-        }
-        .padding(.bottom, 6)
-    }
-
-    private var legendRow: some View {
-        let items: [(Color, String)] = [
-            (Color(red:1,   green:0.27, blue:0),    "ZAP — clears column"),
-            (Color(red:0,   green:0.4,  blue:1),    "3-BALL"),
-            (Color(red:0.67,green:0,    blue:1),    "WIDE paddle"),
-            (Color(red:0,   green:1,    blue:0.53), "SPEED boost"),
-        ]
-        return HStack(spacing: 10) {
-            ForEach(items.indices, id:\.self) { i in
-                HStack(spacing: 4) {
-                    Circle().fill(items[i].0).frame(width:7, height:7)
-                    Text(items[i].1)
-                }
-            }
-        }
-        .font(.system(size: 8, design: .monospaced))
-        .foregroundColor(.white.opacity(0.28))
-        .padding(.top, 5)
-    }
-
-    private var footerView: some View {
-        Text("DRAG TO MOVE PADDLE  |  TAP TO LAUNCH")
-            .font(.system(size: 8, design: .monospaced))
-            .foregroundColor(.white.opacity(0.16))
-            .tracking(1)
-            .padding(.top, 4)
-    }
-
-    // MARK: - Canvas renderer
-    func render(ctx: GraphicsContext, size: CGSize) {
-        // Grid
-        var grid = Path()
-        var gx: CGFloat = 0
-        while gx < size.width  { grid.move(to:.init(x:gx,y:0)); grid.addLine(to:.init(x:gx,y:size.height)); gx+=30 }
-        var gy: CGFloat = 0
-        while gy < size.height { grid.move(to:.init(x:0,y:gy)); grid.addLine(to:.init(x:size.width,y:gy)); gy+=30 }
-        ctx.stroke(grid, with:.color(.cyan.opacity(0.04)), lineWidth:1)
-
-        // Speed flash
-        if game.speedTimer > 0 && (game.speedTimer % 20) < 10 {
-            ctx.stroke(Path(CGRect(x:0,y:0,width:size.width,height:size.height)),
-                       with:.color(Color(red:0,green:1,blue:0.53,opacity:0.18)), lineWidth:8)
-        }
-
-        // Bricks — flat fill + linear gradient sheen (white 30% → black 20%)
-        for b in game.bricks where b.alive {
-            let rect = game.brickRect(b)
-            ctx.drawLayer { c in
-                c.opacity = b.hp < 2 ? 1.0 : 0.75
-                c.addFilter(.shadow(color: b.style.fill.opacity(0.7), radius: 8))
-                // Base color
-                c.fill(Path(roundedRect:rect,cornerRadius:3), with:.color(b.style.fill))
-                // Top-to-bottom gradient sheen overlay matching HTML linear gradient
-                c.fill(Path(roundedRect:rect,cornerRadius:3),
-                       with:.linearGradient(
-                           Gradient(colors:[.white.opacity(0.30), .black.opacity(0.20)]),
-                           startPoint: CGPoint(x:rect.midX, y:rect.minY),
-                           endPoint:   CGPoint(x:rect.midX, y:rect.maxY)))
-                if b.hp >= 2 {
-                    let d = Path(ellipseIn: CGRect(x:rect.maxX-8,y:rect.midY-2.5,width:5,height:5))
-                    c.fill(d, with:.color(.white.opacity(0.7)))
-                }
-            }
-        }
-
-        // Lasers
-        for beam in game.lasers {
-            ctx.drawLayer { c in
-                c.addFilter(.shadow(color:.orange, radius:12))
-                var lp = Path()
-                lp.move(to:.init(x:beam.x,y:beam.y)); lp.addLine(to:.init(x:beam.x,y:0))
-                c.stroke(lp, with:.color(Color(red:1,green:0.4,blue:0)), lineWidth:3)
-                c.stroke(lp, with:.color(Color(red:1,green:0.93,blue:0.53)), lineWidth:1)
-            }
-        }
-
-        // Particles — with glow shadow matching HTML shadowBlur=8
-        for p in game.particles {
-            let r = p.size*p.life
-            ctx.drawLayer { c in
-                c.opacity = Double(p.life)
-                c.addFilter(.shadow(color: p.color.opacity(Double(p.life)), radius: 8))
-                c.fill(Path(ellipseIn:CGRect(x:p.pos.x-r,y:p.pos.y-r,width:r*2,height:r*2)),
-                       with:.color(p.color))
-            }
-        }
-
-        // Power-ups
-        for pu in game.powerups {
-            let rect = CGRect(x:pu.pos.x, y:pu.pos.y, width:puW, height:puH)
-            ctx.drawLayer { c in
-                c.addFilter(.shadow(color:pu.kind.color, radius:14))
-                if pu.kind == .triball {
-                    // Triball: blue platform + mini yellow ball on top (matching HTML drawPowerup)
-                    let platH: CGFloat = 7
-                    let platRect = CGRect(x:rect.minX, y:rect.maxY-platH, width:rect.width, height:platH)
-                    c.fill(Path(roundedRect:platRect,cornerRadius:3),
-                           with:.color(Color(red:0,green:0.33,blue:0.8)))
-                    // Gradient sheen on platform
-                    c.fill(Path(roundedRect:platRect,cornerRadius:3),
-                           with:.linearGradient(
-                               Gradient(colors:[.white.opacity(0.35),.black.opacity(0.20)]),
-                               startPoint:CGPoint(x:platRect.midX,y:platRect.minY),
-                               endPoint:  CGPoint(x:platRect.midX,y:platRect.maxY)))
-                    // Mini ball (same radius as game ball) sitting on top of platform
-                    let bx = rect.midX, by = rect.maxY - platH - ballR
-                    let bBr = CGRect(x:bx-ballR,y:by-ballR,width:ballR*2,height:ballR*2)
-                    // Concentric ellipses: orange → yellow → white highlight (radial gradient approx)
-                    c.fill(Path(ellipseIn:bBr), with:.color(Color(red:1,green:0.6,blue:0)))
-                    let mR = ballR*0.78
-                    c.fill(Path(ellipseIn:CGRect(x:bx-mR,y:by-mR,width:mR*2,height:mR*2)),
-                           with:.color(Color(red:1,green:0.9,blue:0)))
-                    let hR = ballR*0.35
-                    let hOff = ballR*0.25
-                    c.fill(Path(ellipseIn:CGRect(x:bx-hOff-hR,y:by-hOff-hR,width:hR*2,height:hR*2)),
-                           with:.color(Color(red:1,green:0.98,blue:0.77)))
-                } else {
-                    // Standard power-up: colored rect + gradient sheen + label
-                    c.fill(Path(roundedRect:rect,cornerRadius:5), with:.color(pu.kind.color))
-                    c.fill(Path(roundedRect:rect,cornerRadius:5),
-                           with:.linearGradient(
-                               Gradient(colors:[.white.opacity(0.35),.black.opacity(0.20)]),
-                               startPoint:CGPoint(x:rect.midX,y:rect.minY),
-                               endPoint:  CGPoint(x:rect.midX,y:rect.maxY)))
-                    c.draw(Text(pu.kind.label)
-                        .font(.system(size:9,weight:.bold)).foregroundColor(.white),
-                           at:CGPoint(x:rect.midX,y:rect.midY))
-                }
-            }
-        }
-
-        // Paddle — linear gradient top→bottom matching HTML pg gradient
-        let pTop: Color  = game.wideTimer>0  ? Color(red:0.8, green:0.27, blue:1) :
-                           game.speedTimer>0 ? Color(red:0,   green:1,    blue:0.53) :
-                                               Color(red:0,   green:0.96, blue:1)
-        let pBot: Color  = game.wideTimer>0  ? Color(red:0.4, green:0,    blue:0.6) :
-                           game.speedTimer>0 ? Color(red:0,   green:0.53, blue:0.27) :
-                                               Color(red:0,   green:0.53, blue:0.67)
-        let pr = CGRect(x:game.paddleX-game.paddleW/2, y:game.paddleY-paddleH/2,
-                        width:game.paddleW, height:paddleH)
+    // Death flash (no shake — full screen)
+    if engine.deathFlash > 0 {
         ctx.drawLayer { c in
-            c.addFilter(.shadow(color:pTop, radius:18))
-            c.fill(Path(roundedRect:pr,cornerRadius:paddleH/2),
-                   with:.linearGradient(
-                       Gradient(colors:[pTop, pBot]),
-                       startPoint: CGPoint(x:pr.midX, y:pr.minY),
-                       endPoint:   CGPoint(x:pr.midX, y:pr.maxY)))
+            c.opacity = Double(engine.deathFlash * 0.55)
+            c.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.white))
         }
+    }
 
-        // Balls — concentric ellipses approximating HTML radial gradient
-        for b in game.balls {
-            let bx = b.pos.x, by = b.pos.y
-            let br = CGRect(x:bx-ballR, y:by-ballR, width:ballR*2, height:ballR*2)
+    // UI always on top, no shake
+    drawUI(ctx: ctx, size: size, engine: engine)
+}
+
+fileprivate func drawBackground(ctx: GraphicsContext, size: CGSize) {
+    // Deep synthwave gradient: top dark-navy → bottom deep-purple
+    let stops: [Gradient.Stop] = [
+        .init(color: Color(red: 0.02, green: 0.02, blue: 0.10), location: 0),
+        .init(color: Color(red: 0.06, green: 0.02, blue: 0.16), location: 0.55),
+        .init(color: Color(red: 0.10, green: 0.03, blue: 0.22), location: 1),
+    ]
+    ctx.fill(Path(CGRect(origin: .zero, size: size)),
+             with: .linearGradient(Gradient(stops: stops),
+                                   startPoint: CGPoint(x: size.width/2, y: 0),
+                                   endPoint: CGPoint(x: size.width/2, y: size.height)))
+
+    // Horizon glow band
+    let hY = size.height * 0.62
+    ctx.drawLayer { c in
+        c.opacity = 0.18
+        let glowRect = CGRect(x: 0, y: hY - 40, width: size.width, height: 80)
+        c.fill(Path(glowRect), with: .color(Color(red: 0, green: 0.8, blue: 1)))
+    }
+}
+
+fileprivate func drawStars(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
+    let worldW = size.width * 4
+    for star in engine.stars {
+        // Parallax: slow stars move less than world scroll
+        let screenX = star.worldX - engine.scrollX * star.parallax
+        // Wrap to screen
+        let wrapped = screenX.truncatingRemainder(dividingBy: worldW)
+        let fx = wrapped < 0 ? wrapped + worldW : wrapped
+        guard fx >= 0 && fx < size.width else { continue }
+
+        let pr = CGRect(x: fx - star.radius, y: star.y - star.radius,
+                        width: star.radius * 2, height: star.radius * 2)
+        ctx.drawLayer { c in
+            c.opacity = Double(star.brightness)
+            c.fill(Path(ellipseIn: pr), with: .color(.white))
+        }
+    }
+}
+
+fileprivate func drawGround(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
+    let gY   = engine.groundY
+    let gCol = Color(red: 0.03, green: 0.18, blue: 0.25)
+    let edgeCol = Color(red: 0, green: 1, blue: 0.9)
+
+    // Build sorted list of gap screen-x ranges
+    let gaps: [(CGFloat, CGFloat)] = engine.floorGaps
+        .map { (($0.start - engine.scrollX), ($0.end - engine.scrollX)) }
+        .filter { $0.1 > 0 && $0.0 < size.width }
+        .sorted { $0.0 < $1.0 }
+
+    // Draw ground segments between gaps
+    var cursor: CGFloat = 0
+    for gap in gaps {
+        let segEnd = max(cursor, min(gap.0, size.width))
+        if segEnd > cursor {
+            let segRect = CGRect(x: cursor, y: gY, width: segEnd - cursor, height: groundH)
+            ctx.fill(Path(segRect), with: .color(gCol))
+            // edge glow on that segment
+            let edge = Path { p in
+                p.move(to: CGPoint(x: cursor, y: gY))
+                p.addLine(to: CGPoint(x: segEnd, y: gY))
+            }
+            ctx.stroke(edge, with: .color(edgeCol), lineWidth: 2.5)
+        }
+        cursor = max(cursor, gap.1)
+    }
+    // Final segment after last gap
+    if cursor < size.width {
+        let segRect = CGRect(x: cursor, y: gY, width: size.width - cursor, height: groundH)
+        ctx.fill(Path(segRect), with: .color(gCol))
+        let edge = Path { p in
+            p.move(to: CGPoint(x: cursor, y: gY))
+            p.addLine(to: CGPoint(x: size.width, y: gY))
+        }
+        ctx.stroke(edge, with: .color(edgeCol), lineWidth: 2.5)
+    }
+
+    // Pit danger indicators: glowing red at pit edges
+    for gap in gaps {
+        let lx = max(gap.0 - 3, 0)
+        let rx = min(gap.1,     size.width - 3)
+        ctx.drawLayer { c in
+            c.opacity = 0.7
+            c.fill(Path(CGRect(x: lx, y: gY, width: 6, height: groundH / 2)),
+                   with: .color(Color(red: 1, green: 0.1, blue: 0.2)))
+            c.fill(Path(CGRect(x: rx, y: gY, width: 6, height: groundH / 2)),
+                   with: .color(Color(red: 1, green: 0.1, blue: 0.2)))
+        }
+    }
+
+    // Grid lines on all ground segments
+    let gridSpacing: CGFloat = 40
+    let offset = engine.scrollX.truncatingRemainder(dividingBy: gridSpacing)
+    var gx = -offset
+    while gx < size.width {
+        // Only draw if not in a gap
+        let inGap = gaps.contains { gx >= $0.0 && gx <= $0.1 }
+        if !inGap {
+            let linePath = Path { p in
+                p.move(to: CGPoint(x: gx, y: gY))
+                p.addLine(to: CGPoint(x: gx, y: gY + groundH))
+            }
             ctx.drawLayer { c in
-                if b.primary {
-                    // Yellow primary: #ff9900 → #ffe600 → white highlight (like HTML radial gradient)
-                    c.addFilter(.shadow(color: Color(red:1,green:0.9,blue:0,opacity:0.9), radius:20))
-                    c.fill(Path(ellipseIn:br), with:.color(Color(red:1,green:0.6,blue:0)))
-                    let mR = ballR*0.78
-                    c.fill(Path(ellipseIn:CGRect(x:bx-mR,y:by-mR,width:mR*2,height:mR*2)),
-                           with:.color(Color(red:1,green:0.9,blue:0)))
-                } else {
-                    // Colored extras: extraColor → white highlight
-                    c.addFilter(.shadow(color:b.color.opacity(0.9), radius:18))
-                    c.fill(Path(ellipseIn:br), with:.color(b.color.opacity(0.53)))
-                    let mR = ballR*0.78
-                    c.fill(Path(ellipseIn:CGRect(x:bx-mR,y:by-mR,width:mR*2,height:mR*2)),
-                           with:.color(b.color))
+                c.opacity = 0.22
+                c.stroke(linePath, with: .color(.cyan), lineWidth: 1)
+            }
+        }
+        gx += gridSpacing
+    }
+}
+
+fileprivate let spikeColors: [Color] = [
+    Color(red: 0,   green: 1,   blue: 0.9),   // cyan
+    Color(red: 1,   green: 0.2, blue: 0.5),   // hot pink
+    Color(red: 1,   green: 0.75,blue: 0),      // amber
+]
+fileprivate let blockColors: [Color] = [
+    Color(red: 0.15,green: 0.5, blue: 1),      // electric blue
+    Color(red: 0.55,green: 0.1, blue: 0.9),    // deep violet
+    Color(red: 0,   green: 0.75,blue: 0.45),   // teal
+]
+
+fileprivate func drawObstacles(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
+    for obs in engine.obstacles {
+        let sx = obs.rect.minX - engine.scrollX
+        guard sx > -obs.rect.width - 20 && sx < size.width + 20 else { continue }
+
+        let sr = CGRect(x: sx, y: obs.rect.minY, width: obs.rect.width, height: obs.rect.height)
+
+        switch obs.kind {
+        case .spike:
+            let col = spikeColors[obs.colorIdx % spikeColors.count]
+            let triPath = Path { p in
+                p.move(to: CGPoint(x: sr.minX, y: sr.maxY))
+                p.addLine(to: CGPoint(x: sr.midX, y: sr.minY))
+                p.addLine(to: CGPoint(x: sr.maxX, y: sr.maxY))
+                p.closeSubpath()
+            }
+            // Outer glow
+            ctx.drawLayer { c in
+                c.opacity = 0.35
+                let bigTri = Path { p in
+                    p.move(to: CGPoint(x: sr.minX - 3, y: sr.maxY + 2))
+                    p.addLine(to: CGPoint(x: sr.midX,  y: sr.minY - 5))
+                    p.addLine(to: CGPoint(x: sr.maxX + 3, y: sr.maxY + 2))
+                    p.closeSubpath()
                 }
-                // White highlight offset top-left for both ball types
-                let hR = ballR*0.35, hOff = ballR*0.25
-                c.fill(Path(ellipseIn:CGRect(x:bx-hOff-hR,y:by-hOff-hR,width:hR*2,height:hR*2)),
-                       with:.color(Color(red:1,green:0.98,blue:0.77)))
+                c.fill(bigTri, with: .color(col))
             }
-        }
+            ctx.fill(triPath, with: .color(col))
+            // Bright inner highlight edge
+            ctx.stroke(triPath, with: .color(.white.opacity(0.55)), lineWidth: 1)
 
-        // Launch hint
-        if game.phase == .playing, let first = game.balls.first, !first.launched {
-            let alpha = 0.5 + 0.3 * sin(Date().timeIntervalSinceReferenceDate * 3.3)
-            ctx.draw(Text("TAP TO LAUNCH")
-                .font(.system(size:12,weight:.bold,design:.rounded))
-                .foregroundColor(.white.opacity(alpha)),
-                     at: CGPoint(x:size.width/2, y:game.paddleY-22))
-        }
-
-        // Timer bars
-        let bh: CGFloat = 4
-        if game.wideTimer > 0 {
-            ctx.fill(Path(CGRect(x:0,y:size.height-bh,
-                                 width:size.width*CGFloat(game.wideTimer)/600,height:bh)),
-                     with:.color(Color(red:0.8,green:0.27,blue:1)))
-        }
-        if game.speedTimer > 0 {
-            ctx.fill(Path(CGRect(x:0,y:size.height-bh,
-                                 width:size.width*CGFloat(game.speedTimer)/480,height:bh)),
-                     with:.color(Color(red:0,green:1,blue:0.53)))
-        }
-
-        // Level name watermark
-        if game.phase == .playing {
-            let names = ["","CLASSIC","PYRAMID","DIAMOND","CHECKERBOARD","FORTRESS","HERRINGBONE","CROSS","GAUNTLET"]
+        case .block:
+            let col = blockColors[obs.colorIdx % blockColors.count]
+            // Glow halo
             ctx.drawLayer { c in
-                c.opacity = 0.18
-                c.draw(Text(names[min(game.level,8)])
-                    .font(.system(size:9,design:.monospaced)).foregroundColor(.white),
-                       at:CGPoint(x:size.width-40,y:size.height-10))
+                c.opacity = 0.3
+                c.fill(Path(sr.insetBy(dx: -4, dy: -4)), with: .color(col))
+            }
+            ctx.fill(Path(sr), with: .color(col))
+            // Diagonal inner highlight
+            let diagPath = Path { p in
+                p.move(to: CGPoint(x: sr.minX + 6, y: sr.minY + 6))
+                p.addLine(to: CGPoint(x: sr.maxX - 6, y: sr.minY + 6))
+                p.addLine(to: CGPoint(x: sr.maxX - 6, y: sr.maxY - 6))
+            }
+            ctx.stroke(diagPath, with: .color(.white.opacity(0.25)), lineWidth: 1)
+            ctx.stroke(Path(sr), with: .color(.white.opacity(0.5)), lineWidth: 1.5)
+
+        case .platform:
+            let platCol = Color(red: 0.05, green: 0.65, blue: 0.45)
+            ctx.drawLayer { c in
+                c.opacity = 0.3
+                c.fill(Path(sr.insetBy(dx: -3, dy: -3)), with: .color(platCol))
+            }
+            ctx.fill(Path(sr), with: .color(platCol))
+            ctx.stroke(Path(sr), with: .color(.white.opacity(0.5)), lineWidth: 1.5)
+
+        case .ceilSpike:
+            // Inverted triangle (tip points down)
+            let col = Color(red: 1, green: 0.2, blue: 0.5)
+            let triPath = Path { p in
+                p.move(to: CGPoint(x: sr.minX,  y: sr.minY))  // top-left
+                p.addLine(to: CGPoint(x: sr.maxX,  y: sr.minY))  // top-right
+                p.addLine(to: CGPoint(x: sr.midX,  y: sr.maxY))  // bottom tip
+                p.closeSubpath()
+            }
+            ctx.drawLayer { c in
+                c.opacity = 0.35
+                let bigTri = Path { p in
+                    p.move(to: CGPoint(x: sr.minX - 3, y: sr.minY - 2))
+                    p.addLine(to: CGPoint(x: sr.maxX + 3, y: sr.minY - 2))
+                    p.addLine(to: CGPoint(x: sr.midX,     y: sr.maxY + 5))
+                    p.closeSubpath()
+                }
+                c.fill(bigTri, with: .color(col))
+            }
+            ctx.fill(triPath, with: .color(col))
+            ctx.stroke(triPath, with: .color(.white.opacity(0.55)), lineWidth: 1)
+
+        case .portal:
+            // Tall vertical ring — glowing purple/orange depending on destination
+            let portalCol = Color(red: 0.7, green: 0.1, blue: 1)   // purple = ship portal
+            ctx.drawLayer { c in
+                c.opacity = 0.25
+                c.fill(Path(sr), with: .color(portalCol))
+            }
+            ctx.stroke(Path(sr), with: .color(portalCol), lineWidth: 3)
+            // Chevron arrows inside portal hinting direction
+            for i in 0..<3 {
+                let ay = sr.minY + sr.height * (0.3 + CGFloat(i) * 0.2)
+                let arrPath = Path { p in
+                    p.move(to: CGPoint(x: sr.minX + 4,  y: ay))
+                    p.addLine(to: CGPoint(x: sr.midX,    y: ay - 8))
+                    p.addLine(to: CGPoint(x: sr.maxX - 4, y: ay))
+                }
+                ctx.drawLayer { c in
+                    c.opacity = 0.8
+                    c.stroke(arrPath, with: .color(.white), lineWidth: 1.5)
+                }
+            }
+
+        case .jumpPad:
+            // Yellow/green chevron shape on ground
+            let padCol = Color(red: 1, green: 0.85, blue: 0)
+            let chevron = Path { p in
+                p.move(to: CGPoint(x: sr.minX,       y: sr.maxY))
+                p.addLine(to: CGPoint(x: sr.midX,     y: sr.minY))
+                p.addLine(to: CGPoint(x: sr.maxX,     y: sr.maxY))
+                p.addLine(to: CGPoint(x: sr.maxX - 8, y: sr.maxY))
+                p.addLine(to: CGPoint(x: sr.midX,     y: sr.minY + 8))
+                p.addLine(to: CGPoint(x: sr.minX + 8, y: sr.maxY))
+                p.closeSubpath()
+            }
+            ctx.drawLayer { c in
+                c.opacity = 0.45
+                c.fill(Path(sr.insetBy(dx: -5, dy: -5)), with: .color(padCol))
+            }
+            ctx.fill(chevron, with: .color(padCol))
+            ctx.stroke(chevron, with: .color(.white.opacity(0.7)), lineWidth: 1)
+        }
+    }
+}
+
+fileprivate func drawPlayer(ctx: GraphicsContext, engine: GDEngine) {
+    let cx = engine.playerX + playerW / 2
+    let cy = engine.playerY + playerH / 2
+    let angleRad = engine.cubeAngle * CGFloat.pi / 180
+
+    // Draw cube in a rotated layer
+    ctx.drawLayer { c in
+        // Rotate around cube centre
+        c.concatenate(CGAffineTransform(translationX: cx, y: cy))
+        c.concatenate(CGAffineTransform(rotationAngle: angleRad))
+        c.concatenate(CGAffineTransform(translationX: -cx, y: -cy))
+
+        let r = CGRect(x: engine.playerX, y: engine.playerY, width: playerW, height: playerH)
+
+        // Outer glow (larger box, low opacity)
+        c.drawLayer { g in
+            g.opacity = 0.4
+            g.fill(Path(r.insetBy(dx: -6, dy: -6)),
+                   with: .color(Color(red: 0.1, green: 1, blue: 0.5)))
+        }
+
+        // Cube body — lime-green gradient feel via two overlapping fills
+        c.fill(Path(r), with: .color(Color(red: 0.05, green: 0.75, blue: 0.35)))
+        c.drawLayer { g in
+            g.opacity = 0.55
+            let topHalf = CGRect(x: r.minX, y: r.minY, width: r.width, height: r.height * 0.5)
+            g.fill(Path(topHalf), with: .color(Color(red: 0.2, green: 1, blue: 0.55)))
+        }
+
+        // Inner square detail
+        let inset: CGFloat = 6
+        let ir = r.insetBy(dx: inset, dy: inset)
+        c.stroke(Path(ir), with: .color(.white.opacity(0.55)), lineWidth: 1.5)
+
+        // Diagonal line detail
+        let diagPath = Path { p in
+            p.move(to: CGPoint(x: r.minX + inset, y: r.minY + inset))
+            p.addLine(to: CGPoint(x: r.maxX - inset, y: r.maxY - inset))
+        }
+        c.stroke(diagPath, with: .color(.white.opacity(0.3)), lineWidth: 1)
+
+        // Bright white outline
+        c.stroke(Path(r), with: .color(.white.opacity(0.85)), lineWidth: 1.5)
+    }
+}
+
+fileprivate func drawShip(ctx: GraphicsContext, engine: GDEngine) {
+    let cx = engine.playerX + playerW / 2
+    let cy = engine.playerY + playerH / 2
+    // Ship tilts slightly based on vertical velocity
+    let tilt = max(-25, min(25, engine.velY * 2.0))
+    let angleRad = tilt * CGFloat.pi / 180
+
+    ctx.drawLayer { c in
+        c.concatenate(CGAffineTransform(translationX: cx, y: cy))
+        c.concatenate(CGAffineTransform(rotationAngle: angleRad))
+        c.concatenate(CGAffineTransform(translationX: -cx, y: -cy))
+
+        let r = CGRect(x: engine.playerX, y: engine.playerY, width: playerW, height: playerH)
+        // Ship body: horizontal diamond / arrow
+        let shipPath = Path { p in
+            p.move(to: CGPoint(x: r.maxX,      y: r.midY))        // nose
+            p.addLine(to: CGPoint(x: r.minX + 6, y: r.minY + 6))  // top-left
+            p.addLine(to: CGPoint(x: r.minX,     y: r.midY))      // tail
+            p.addLine(to: CGPoint(x: r.minX + 6, y: r.maxY - 6))  // bottom-left
+            p.closeSubpath()
+        }
+        let shipCol = Color(red: 0.2, green: 0.8, blue: 1)
+        // Outer glow
+        c.drawLayer { g in
+            g.opacity = 0.4
+            g.fill(Path(r.insetBy(dx: -6, dy: -6)), with: .color(shipCol))
+        }
+        c.fill(shipPath, with: .color(shipCol))
+        // Highlight
+        c.drawLayer { g in
+            g.opacity = 0.5
+            let hiPath = Path { p in
+                p.move(to: CGPoint(x: r.maxX,       y: r.midY))
+                p.addLine(to: CGPoint(x: r.minX + 6, y: r.minY + 6))
+                p.addLine(to: CGPoint(x: r.midX,     y: r.midY))
+            }
+            g.stroke(hiPath, with: .color(.white), lineWidth: 2)
+        }
+        c.stroke(shipPath, with: .color(.white.opacity(0.85)), lineWidth: 1.5)
+
+        // Thrust flame when holding
+        if engine.holding {
+            c.drawLayer { g in
+                g.opacity = CGFloat.random(in: 0.6...1.0)
+                let flame = Path { p in
+                    p.move(to: CGPoint(x: r.minX,     y: r.midY - 5))
+                    p.addLine(to: CGPoint(x: r.minX - CGFloat.random(in: 10...18), y: r.midY))
+                    p.addLine(to: CGPoint(x: r.minX,     y: r.midY + 5))
+                    p.closeSubpath()
+                }
+                g.fill(flame, with: .color(Color(red: 1, green: 0.6, blue: 0)))
             }
         }
     }
+}
 
-    // MARK: - HUD / overlay helpers
-    @ViewBuilder
-    private func hudItem(_ label: String, _ value: String) -> some View {
-        VStack(spacing: 2) {
-            Text(label)
-                .font(.system(size:9, weight:.regular, design:.monospaced))
+fileprivate func drawParticles(ctx: GraphicsContext, engine: GDEngine) {
+    for p in engine.particles {
+        let alpha = p.life / p.maxLife
+        ctx.drawLayer { c in
+            c.opacity = Double(alpha)
+            let pr = CGRect(x: p.pos.x - p.size/2, y: p.pos.y - p.size/2,
+                            width: p.size, height: p.size)
+            c.fill(Path(ellipseIn: pr), with: .color(p.color))
+        }
+    }
+}
+
+fileprivate func drawUI(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
+    switch engine.state {
+    case .menu:
+        drawCenteredText(ctx: ctx, size: size,
+                         line1: "GEOMETRY DASH", line2: "Tap to Start")
+    case .dead:
+        drawCenteredText(ctx: ctx, size: size,
+                         line1: "CRASHED", line2: "Restarting...")
+    case .victory:
+        drawCenteredText(ctx: ctx, size: size,
+                         line1: "LEVEL COMPLETE!", line2: "Tap to Play Again")
+    case .playing:
+        drawHUD(ctx: ctx, size: size, engine: engine)
+    }
+}
+
+fileprivate func drawHUD(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
+    // Progress bar background
+    let barW = size.width - 40
+    let barH: CGFloat = 6
+    let barX: CGFloat = 20
+    let barY: CGFloat = 14
+    ctx.fill(Path(CGRect(x: barX, y: barY, width: barW, height: barH)),
+             with: .color(.white.opacity(0.15)))
+
+    // Progress fill
+    let fillW = barW * engine.progress
+    if fillW > 0 {
+        ctx.fill(Path(CGRect(x: barX, y: barY, width: fillW, height: barH)),
+                 with: .color(.cyan))
+    }
+
+    // Attempt counter
+    let attText = Text("Attempt \(engine.attempts)")
+        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+        .foregroundColor(.white.opacity(0.7))
+    ctx.draw(attText, at: CGPoint(x: 20, y: 32), anchor: .topLeading)
+
+    // Mode indicator
+    let modeLabel = engine.mode == .ship ? "✈ SHIP" : "▣ CUBE"
+    let modeColor: Color = engine.mode == .ship ?
+        Color(red: 0.2, green: 0.8, blue: 1) : Color(red: 0.1, green: 1, blue: 0.5)
+    let modeText = Text(modeLabel)
+        .font(.system(size: 12, weight: .bold, design: .monospaced))
+        .foregroundColor(modeColor)
+    ctx.draw(modeText, at: CGPoint(x: size.width / 2, y: 32), anchor: .top)
+
+    // Percent
+    let pct = Int(engine.progress * 100)
+    let pctText = Text("\(pct)%")
+        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+        .foregroundColor(.cyan.opacity(0.9))
+    ctx.draw(pctText, at: CGPoint(x: size.width - 20, y: 32), anchor: .topTrailing)
+}
+
+fileprivate func drawCenteredText(ctx: GraphicsContext, size: CGSize,
+                                   line1: String, line2: String) {
+    ctx.drawLayer { c in
+        c.opacity = 0.6
+        c.fill(Path(CGRect(x: size.width/2 - 160, y: size.height/2 - 50,
+                           width: 320, height: 90)),
+               with: .color(.black))
+    }
+    let t1 = Text(line1)
+        .font(.system(size: 26, weight: .black, design: .monospaced))
+        .foregroundColor(.cyan)
+    ctx.draw(t1, at: CGPoint(x: size.width/2, y: size.height/2 - 20), anchor: .center)
+
+    let t2 = Text(line2)
+        .font(.system(size: 15, weight: .medium, design: .monospaced))
+        .foregroundColor(.white.opacity(0.8))
+    ctx.draw(t2, at: CGPoint(x: size.width/2, y: size.height/2 + 14), anchor: .center)
+}
+
+// MARK: - Editor Renderer
+
+fileprivate func renderEditor(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
+    // Dark grid background
+    ctx.fill(Path(CGRect(origin: .zero, size: size)),
+             with: .color(Color(red: 0.04, green: 0.04, blue: 0.14)))
+
+    let scroll = engine.editorScrollX
+    let gY     = engine.groundY
+
+    // Grid lines
+    let gsp: CGFloat = 40
+    var gx = -(scroll.truncatingRemainder(dividingBy: gsp))
+    while gx < size.width {
+        ctx.drawLayer { c in
+            c.opacity = 0.18
+            c.stroke(Path { p in
+                p.move(to: CGPoint(x: gx, y: 0))
+                p.addLine(to: CGPoint(x: gx, y: size.height))
+            }, with: .color(.cyan), lineWidth: 1)
+        }
+        // World X label every 200px
+        let worldX = Int(gx + scroll)
+        if worldX % 200 == 0 {
+            let lbl = Text("\(worldX)")
+                .font(.system(size: 9, design: .monospaced))
                 .foregroundColor(.white.opacity(0.4))
-                .tracking(2)
-            Text(value)
-                .font(.system(size:15, weight:.bold, design:.monospaced))
-                .foregroundColor(Color(red:1,green:0.9,blue:0))
+            ctx.draw(lbl, at: CGPoint(x: gx + 2, y: 4), anchor: .topLeading)
+        }
+        gx += gsp
+    }
+    var gy: CGFloat = 0
+    while gy < size.height {
+        ctx.drawLayer { c in
+            c.opacity = 0.10
+            c.stroke(Path { p in
+                p.move(to: CGPoint(x: 0, y: gy))
+                p.addLine(to: CGPoint(x: size.width, y: gy))
+            }, with: .color(.cyan), lineWidth: 1)
+        }
+        gy += gsp
+    }
+
+    // Ground line
+    let groundPath = Path { p in
+        p.move(to: CGPoint(x: 0, y: gY))
+        p.addLine(to: CGPoint(x: size.width, y: gY))
+    }
+    ctx.stroke(groundPath, with: .color(Color(red: 0, green: 1, blue: 0.8)), lineWidth: 2)
+    ctx.fill(Path(CGRect(x: 0, y: gY, width: size.width, height: groundH)),
+             with: .color(Color(red: 0.03, green: 0.18, blue: 0.25)))
+
+    // Level-end marker
+    let endX = levelLen - scroll
+    if endX > 0 && endX < size.width {
+        ctx.drawLayer { c in
+            c.opacity = 0.7
+            c.stroke(Path { p in
+                p.move(to: CGPoint(x: endX, y: 0))
+                p.addLine(to: CGPoint(x: endX, y: size.height))
+            }, with: .color(.yellow), lineWidth: 2)
+        }
+        let endLbl = Text("END")
+            .font(.system(size: 11, weight: .bold, design: .monospaced))
+            .foregroundColor(.yellow)
+        ctx.draw(endLbl, at: CGPoint(x: endX + 4, y: 18), anchor: .topLeading)
+    }
+
+    // Draw built-in obstacles (dim)
+    for obs in engine.obstacles {
+        let sx = obs.rect.minX - scroll
+        guard sx > -obs.rect.width && sx < size.width else { continue }
+        let sr = CGRect(x: sx, y: obs.rect.minY, width: obs.rect.width, height: obs.rect.height)
+        ctx.drawLayer { c in
+            c.opacity = 0.45
+            drawObstacleShape(ctx: c, obs: obs, sr: sr)
         }
     }
 
-    @ViewBuilder
-    private func modal(title:String, sub:String, btn:String, color:Color, action: @escaping ()->Void) -> some View {
-        VStack(spacing:16) {
-            Text(title)
-                .font(.system(size:24,weight:.black,design:.rounded))
-                .foregroundColor(color)
-                .multilineTextAlignment(.center)
-            Text(sub)
-                .font(.system(size:11,design:.monospaced))
-                .foregroundColor(.white.opacity(0.5))
-                .multilineTextAlignment(.center)
-            Button(btn, action: action)
-                .font(.system(size:12,weight:.bold,design:.rounded))
-                .padding(.horizontal,24).padding(.vertical,10)
-                .overlay(RoundedRectangle(cornerRadius:4).stroke(color,lineWidth:1))
-                .foregroundColor(color)
+    // Draw custom obstacles (bright, with orange outline)
+    for obs in engine.customObstacles {
+        let sx = obs.rect.minX - scroll
+        guard sx > -obs.rect.width && sx < size.width else { continue }
+        let sr = CGRect(x: sx, y: obs.rect.minY, width: obs.rect.width, height: obs.rect.height)
+        drawObstacleShape(ctx: ctx, obs: obs, sr: sr)
+        ctx.stroke(Path(sr.insetBy(dx: -2, dy: -2)),
+                   with: .color(Color(red: 1, green: 0.6, blue: 0)), lineWidth: 2)
+    }
+
+    // Editor mode label
+    let modeStr = engine.editorEraseMode ? "ERASE MODE" : "PLACE: \(engine.selectedKind)"
+    let modeLbl = Text(modeStr)
+        .font(.system(size: 12, weight: .bold, design: .monospaced))
+        .foregroundColor(engine.editorEraseMode ? .red : .cyan)
+    ctx.draw(modeLbl, at: CGPoint(x: size.width / 2, y: 10), anchor: .top)
+}
+
+/// Draws a single obstacle's shape into a graphics context (shared by game + editor).
+fileprivate func drawObstacleShape(ctx: GraphicsContext, obs: GDObstacle, sr: CGRect) {
+    switch obs.kind {
+    case .spike:
+        let col = spikeColors[obs.colorIdx % spikeColors.count]
+        let path = Path { p in
+            p.move(to: CGPoint(x: sr.minX, y: sr.maxY))
+            p.addLine(to: CGPoint(x: sr.midX, y: sr.minY))
+            p.addLine(to: CGPoint(x: sr.maxX, y: sr.maxY))
+            p.closeSubpath()
         }
-        .padding(40)
-        .background(Color(red:0.02,green:0.04,blue:0.08).opacity(0.88))
-        .clipShape(RoundedRectangle(cornerRadius:16))
+        ctx.fill(path, with: .color(col))
+        ctx.stroke(path, with: .color(.white.opacity(0.4)), lineWidth: 1)
+    case .ceilSpike:
+        let col = Color(red: 1, green: 0.2, blue: 0.5)
+        let path = Path { p in
+            p.move(to: CGPoint(x: sr.minX, y: sr.minY))
+            p.addLine(to: CGPoint(x: sr.maxX, y: sr.minY))
+            p.addLine(to: CGPoint(x: sr.midX, y: sr.maxY))
+            p.closeSubpath()
+        }
+        ctx.fill(path, with: .color(col))
+        ctx.stroke(path, with: .color(.white.opacity(0.4)), lineWidth: 1)
+    case .block:
+        let col = blockColors[obs.colorIdx % blockColors.count]
+        ctx.fill(Path(sr), with: .color(col))
+        ctx.stroke(Path(sr), with: .color(.white.opacity(0.4)), lineWidth: 1)
+    case .platform:
+        ctx.fill(Path(sr), with: .color(Color(red: 0.05, green: 0.65, blue: 0.45)))
+        ctx.stroke(Path(sr), with: .color(.white.opacity(0.5)), lineWidth: 1.5)
+    case .jumpPad:
+        let padCol = Color(red: 1, green: 0.85, blue: 0)
+        ctx.fill(Path(sr), with: .color(padCol))
+        ctx.stroke(Path(sr), with: .color(.white.opacity(0.5)), lineWidth: 1)
+    case .portal:
+        ctx.stroke(Path(sr), with: .color(Color(red: 0.7, green: 0.1, blue: 1)), lineWidth: 2.5)
+        ctx.drawLayer { c in
+            c.opacity = 0.2
+            c.fill(Path(sr), with: .color(Color(red: 0.7, green: 0.1, blue: 1)))
+        }
     }
 }
