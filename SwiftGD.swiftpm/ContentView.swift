@@ -351,8 +351,8 @@ class GDEngine: ObservableObject {
                     continue
 
                 case .jumpPad:
-                    let prevBottom = playerY + playerH - velY
-                    if prevBottom <= sRect.minY + 6 && velY >= 0 {
+                    // Trigger whenever player is on top of pad (not while rising from a jump)
+                    if velY >= 0 {
                         playerY = sRect.minY - playerH
                         velY = jumpVel * 1.35
                         onGround = false
@@ -616,6 +616,8 @@ struct GDButtonStyle: ButtonStyle {
 struct EditorView: View {
     @ObservedObject var engine: GDEngine
     @State private var scrollStart: CGFloat = 0
+    @State private var movingIdx: Int? = nil   // index in customObstacles being dragged
+    @State private var isPanning = false
 
     let kindOptions: [(ObstacleKind, String)] = [
         (.spike,    "▲ Spike"),
@@ -665,17 +667,53 @@ struct EditorView: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { v in
-                            if abs(v.translation.width) > 10 || abs(v.translation.height) > 10 {
+                            let canvasGroundY = geo.size.height - groundH
+                            let yScale: CGFloat = engine.groundY > 0 ? canvasGroundY / engine.groundY : 1
+
+                            // Decide mode on first significant movement or immediately if on an obstacle
+                            if movingIdx == nil && !isPanning {
+                                let startWorldX = v.startLocation.x + engine.editorScrollX
+                                let startGameY  = v.startLocation.y / yScale
+                                let hitPt = CGPoint(x: startWorldX, y: startGameY)
+                                if let idx = engine.customObstacles.indices.first(where: {
+                                    engine.customObstacles[$0].rect.insetBy(dx: -10, dy: -10).contains(hitPt)
+                                }) {
+                                    movingIdx = idx
+                                } else if abs(v.translation.width) > 10 || abs(v.translation.height) > 10 {
+                                    isPanning = true
+                                }
+                            }
+
+                            if let idx = movingIdx {
+                                // Move the obstacle: X always snapped to grid; Y only for block/platform
+                                let worldX = v.location.x + engine.editorScrollX
+                                let snappedX = (worldX / 40).rounded(.down) * 40
+                                var obs = engine.customObstacles[idx]
+                                let xOff: CGFloat = (obs.kind == .spike || obs.kind == .ceilSpike) ? 2 : 0
+                                var newY = obs.rect.minY
+                                if obs.kind == .block || obs.kind == .platform {
+                                    let gameY = v.location.y / yScale
+                                    newY = (gameY / 40).rounded(.down) * 40
+                                }
+                                obs.rect = CGRect(x: snappedX + xOff, y: newY,
+                                                  width: obs.rect.width, height: obs.rect.height)
+                                // Reassign array to trigger @Published
+                                var arr = engine.customObstacles
+                                arr[idx] = obs
+                                engine.customObstacles = arr
+                            } else if isPanning {
                                 engine.editorScrollX = max(0, scrollStart - v.translation.width)
                             }
                         }
                         .onEnded { v in
-                            let dist = hypot(v.translation.width, v.translation.height)
-                            if dist < 10 {
-                                engine.editorAction(at: v.location, size: geo.size)
+                            if movingIdx != nil {
+                                movingIdx = nil
+                            } else if !isPanning {
+                                engine.editorAction(at: v.startLocation, size: geo.size)
                             } else {
                                 scrollStart = engine.editorScrollX
                             }
+                            isPanning = false
                         }
                 )
                 .onAppear { scrollStart = engine.editorScrollX }
