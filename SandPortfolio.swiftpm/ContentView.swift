@@ -45,6 +45,16 @@ fileprivate let topAssets: [AssetInfo] = [
     .init(id: "EEM",   name: "Emerging Markets",  shortName: "EM",       category: "equity",     parent: nil, level: 1, displayGroup: "International", colorHex: "#2D9162", emoji: "🌏"),
     .init(id: "VNQ",   name: "Real Estate",       shortName: "REITs",    category: "realestate", parent: nil, level: 1, displayGroup: "Alternatives",  colorHex: "#D4813A", emoji: "🏢"),
     .init(id: "SGOV",  name: "Cash",              shortName: "Cash",     category: "cash",       parent: nil, level: 1, displayGroup: "Cash",          colorHex: "#9CA3AF", emoji: "💰"),
+    // ── Additional fixed income
+    .init(id: "TIP",     name: "TIPS",            shortName: "TIPS",     category: "bond",       parent: nil, level: 1, displayGroup: "Fixed Income",  colorHex: "#60A5FA", emoji: "📈"),
+    // ── Credit spread products — fall during flight-to-safety
+    .init(id: "HYG",     name: "High Yield Bonds",shortName: "Hi Yield", category: "credit",     parent: nil, level: 1, displayGroup: "Credit",        colorHex: "#F87171", emoji: "🔴"),
+    .init(id: "LQD",     name: "IG Corp Bonds",   shortName: "IG Corp",  category: "credit",     parent: nil, level: 1, displayGroup: "Credit",        colorHex: "#FCA5A5", emoji: "🟠"),
+    // ── Volatility — spikes during panic; inverse of equities
+    .init(id: "VXX",     name: "Volatility (VIX)",shortName: "Vol/VIX",  category: "volatility", parent: nil, level: 1, displayGroup: "Volatility",    colorHex: "#E879F9", emoji: "⚡"),
+    // ── Forex — EUR/USD falls in USD risk-off bid; JPY=X falls when yen strengthens
+    .init(id: "EURUSD=X",name: "EUR / USD",       shortName: "EUR/USD",  category: "forex",      parent: nil, level: 1, displayGroup: "Forex",         colorHex: "#7C3AED", emoji: "🇪🇺"),
+    .init(id: "JPY=X",   name: "USD / JPY",        shortName: "USD/JPY",  category: "forex",      parent: nil, level: 1, displayGroup: "Forex",         colorHex: "#A78BFA", emoji: "🇯🇵"),
 ]
 
 // TODO Phase 2: replace with GRDB query:

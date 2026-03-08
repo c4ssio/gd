@@ -76,6 +76,30 @@ ASSETS = [
     ("SGOV",  "Cash",                "Cash",     "cash",        None,    1,
      "Cash",          "#9CA3AF", 1,
      "iShares 0-3 Month Treasury Bond ETF; near-cash equivalent"),
+    # ── Additional fixed income ───────────────────────────────────────────
+    ("TIP",   "TIPS",               "TIPS",     "bond",        None,    1,
+     "Fixed Income",  "#60A5FA", 3,
+     "iShares TIPS Bond ETF; inflation-protected Treasuries; tracks real rates"),
+    # ── Credit / spread products ─────────────────────────────────────────
+    # Flight-to-safety: HYG/LQD fall as spreads widen; TLT/SGOV receive inflows
+    ("HYG",   "High Yield Bonds",   "Hi Yield", "credit",      None,    1,
+     "Credit",        "#F87171", 1,
+     "iShares iBoxx High Yield Corporate Bond ETF; spread widens in risk-off"),
+    ("LQD",   "IG Corp Bonds",      "IG Corp",  "credit",      None,    1,
+     "Credit",        "#FCA5A5", 2,
+     "iShares iBoxx Investment Grade Corporate Bond ETF; quality flight indicator"),
+    # ── Volatility ────────────────────────────────────────────────────────
+    ("VXX",   "Volatility (VIX)",   "Vol/VIX",  "volatility",  None,    1,
+     "Volatility",    "#E879F9", 1,
+     "ProShares VIX Short-Term Futures ETF; spikes during flight-to-safety events"),
+    # ── Additional forex ─────────────────────────────────────────────────
+    ("EURUSD=X", "EUR / USD",       "EUR/USD",  "forex",       None,    1,
+     "Forex",         "#7C3AED", 2,
+     "Euro vs US Dollar spot rate; EUR weakens in global risk-off events"),
+    # JPY=X is USD/JPY — price falls when yen strengthens (safe-haven bid)
+    ("JPY=X", "USD / JPY",          "USD/JPY",  "forex",       None,    1,
+     "Forex",         "#A78BFA", 3,
+     "US Dollar vs Japanese Yen; falls when yen strengthens as safe-haven"),
     # ── US Equity Sectors (SPDR) — parent = US_EQ ────────────────────────
     ("XLK",  "Technology",           "Tech",     "equity_sector", "US_EQ", 2,
      "US Equities",   "#F59E0B", 1,

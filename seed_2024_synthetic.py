@@ -152,6 +152,39 @@ ASSETS = [
      "Cash",          "#9CA3AF", 1,
      "iShares 0-3 Month Treasury Bond ETF; near-cash equivalent"),
 
+    # ── Additional fixed income ───────────────────────────────────────────
+    ("TIP",   "TIPS",               "TIPS",     "bond",        None,    1,
+     "Fixed Income",  "#60A5FA", 3,
+     "iShares TIPS Bond ETF; inflation-protected Treasuries; tracks real rates"),
+
+    # ── Credit / spread products ─────────────────────────────────────────
+    # Flight-to-safety: HYG/LQD fall as spreads widen; TLT/SGOV receive inflows
+    ("HYG",   "High Yield Bonds",   "Hi Yield", "credit",      None,    1,
+     "Credit",        "#F87171", 1,
+     "iShares iBoxx High Yield Corporate Bond ETF; spread widens in risk-off"),
+
+    ("LQD",   "IG Corp Bonds",      "IG Corp",  "credit",      None,    1,
+     "Credit",        "#FCA5A5", 2,
+     "iShares iBoxx Investment Grade Corporate Bond ETF; quality flight indicator"),
+
+    # ── Volatility ────────────────────────────────────────────────────────
+    # VXX rises sharply during panic; negative carry in calm markets
+    ("VXX",   "Volatility (VIX)",   "Vol/VIX",  "volatility",  None,    1,
+     "Volatility",    "#E879F9", 1,
+     "ProShares VIX Short-Term Futures ETF; spikes during flight-to-safety events"),
+
+    # ── Additional forex ─────────────────────────────────────────────────
+    # EUR/USD: EUR weakens vs USD in risk-off; key rotation signal
+    ("EURUSD=X", "EUR / USD",       "EUR/USD",  "forex",       None,    1,
+     "Forex",         "#7C3AED", 2,
+     "Euro vs US Dollar spot rate; EUR weakens in global risk-off events"),
+
+    # USD/JPY: JPY is a safe-haven; yen STRENGTHENS (JPY=X falls) in panic
+    # JPY=X is price of 1 USD in yen — rising = yen weakening
+    ("JPY=X", "USD / JPY",          "USD/JPY",  "forex",       None,    1,
+     "Forex",         "#A78BFA", 3,
+     "US Dollar vs Japanese Yen; JPY=X falls when yen strengthens (safe-haven bid)"),
+
     # ── US Equity Sectors (SPDR) — parent = US_EQ ────────────────────────
     ("XLK",  "Technology",           "Tech",     "equity_sector", "US_EQ", 2,
      "US Equities",   "#F59E0B", 1,
@@ -208,12 +241,24 @@ TRADEABLE = [t for t, *_ in ASSETS if t != "US_EQ"]
 
 # Approximate annual returns (total return, 2024)
 ANNUAL_RETURN_2024 = {
-    "TLT":  -0.079, "SHV":  0.053, "GLD":  0.272, "DJP":  -0.020,
-    "UUP":   0.068, "EFA":  0.040, "EEM":  0.080, "VNQ":   0.054,
+    # Core asset classes
+    "TLT":  -0.079, "SHV":   0.053, "GLD":   0.272, "DJP":  -0.020,
+    "UUP":   0.068, "EFA":   0.040, "EEM":   0.080, "VNQ":   0.054,
     "SGOV":  0.053,
-    "XLK":   0.430, "XLV":  0.020, "XLF":  0.300, "XLY":   0.300,
-    "XLP":  -0.010, "XLI":  0.180, "XLE": -0.030, "XLU":   0.230,
-    "XLB":   0.020, "XLRE": 0.040, "XLC":  0.400,
+    # Fixed income additions
+    "TIP":   0.045,   # TIPS positive as real rates stayed elevated
+    # Credit spread products
+    "HYG":   0.085,   # high yield did well in the 2024 risk-on environment
+    "LQD":   0.015,   # IG credit roughly flat
+    # Volatility — large negative due to contango decay; VIX stayed subdued
+    "VXX":  -0.580,
+    # Forex (price of 1 EUR in USD; price of 1 USD in JPY)
+    "EURUSD=X": -0.070,  # EUR weakened vs USD in 2024
+    "JPY=X":     0.110,  # USD/JPY rose: yen weakened significantly in 2024
+    # US equity sectors
+    "XLK":   0.430, "XLV":   0.020, "XLF":   0.300, "XLY":   0.300,
+    "XLP":  -0.010, "XLI":   0.180, "XLE":  -0.030, "XLU":   0.230,
+    "XLB":   0.020, "XLRE":  0.040, "XLC":   0.400,
 }
 
 # Annual volatility (σ) — drives noise amplitude
@@ -221,6 +266,10 @@ ANNUAL_VOL = {
     "TLT":  0.140, "SHV":  0.005, "GLD":  0.130, "DJP":  0.160,
     "UUP":  0.065, "EFA":  0.120, "EEM":  0.160, "VNQ":  0.180,
     "SGOV": 0.003,
+    "TIP":  0.080,
+    "HYG":  0.060, "LQD":  0.070,
+    "VXX":  0.650,   # very high vol; path-dependent decay
+    "EURUSD=X": 0.070, "JPY=X": 0.090,
     "XLK":  0.220, "XLV":  0.140, "XLF":  0.180, "XLY":  0.220,
     "XLP":  0.110, "XLI":  0.160, "XLE":  0.220, "XLU":  0.150,
     "XLB":  0.180, "XLRE": 0.180, "XLC":  0.220,
@@ -231,6 +280,10 @@ START_PRICE = {
     "TLT":  93.0,  "SHV": 110.4, "GLD": 186.5, "DJP":  19.3,
     "UUP":  28.5,  "EFA":  72.1, "EEM":  38.6, "VNQ":  82.0,
     "SGOV": 100.3,
+    "TIP":  107.0,
+    "HYG":  77.5,  "LQD": 108.5,
+    "VXX":  27.5,
+    "EURUSD=X": 1.105, "JPY=X": 141.5,
     "XLK": 192.0,  "XLV": 133.5, "XLF":  35.8, "XLY": 168.0,
     "XLP":  70.2,  "XLI": 113.0, "XLE":  88.5, "XLU":  61.0,
     "XLB":  84.0,  "XLRE": 39.2, "XLC":  64.3,
