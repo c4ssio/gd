@@ -657,7 +657,7 @@ struct EditorView: View {
 
             // ── Editor canvas ──
             GeometryReader { geo in
-                TimelineView(.fixed(interval: 1/30)) { _ in
+                TimelineView(.periodic(from: .now, by: 1.0/30.0)) { _ in
                     Canvas { ctx, size in
                         renderEditor(ctx: ctx, size: size, engine: engine)
                     }
