@@ -5,7 +5,7 @@ fileprivate let playerW:    CGFloat = 30
 fileprivate let playerH:    CGFloat = 30
 fileprivate let gravity:    CGFloat = 0.65
 fileprivate let jumpVel:    CGFloat = -13.5
-fileprivate let scrollSpd:  CGFloat = 2
+fileprivate let scrollSpd:  CGFloat = 5
 fileprivate let levelLen:   CGFloat = 7700
 fileprivate let groundH:    CGFloat = 50
 
