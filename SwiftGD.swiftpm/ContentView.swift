@@ -78,6 +78,7 @@ class GDEngine: ObservableObject {
     var deathPause: CGFloat = 0
     var victoryTimer: CGFloat = 0
     var lastDate: Date = Date()
+    var accumulator: Double = 0
     var portalCooldown: Int = 0
 
     // Set once from size
@@ -250,147 +251,159 @@ class GDEngine: ObservableObject {
         let now = Date()
         let rawDt = now.timeIntervalSince(lastDate)
         lastDate = now
-        let dt = CGFloat(min(rawDt, 0.05))
+        // Cap to avoid spiral-of-death after backgrounding
+        accumulator += min(rawDt, 0.1)
 
+        let fixedStep: Double = 1.0 / 60.0
+        let stepDt = CGFloat(fixedStep)
+
+        // Non-playing states: update with real dt, no fixed step needed
         switch state {
-        case .menu: return
+        case .menu:
+            accumulator = 0
+            return
         case .dead:
+            let dt = CGFloat(min(rawDt, 0.05))
             updateParticles(dt: dt)
             deathFlash = max(0, deathFlash - dt * 2.5)
             deathPause -= dt
             if deathPause <= 0 { restartGame() }
+            accumulator = 0
             return
         case .victory:
+            let dt = CGFloat(min(rawDt, 0.05))
             victoryTimer += dt
             updateParticles(dt: dt)
+            accumulator = 0
             return
         case .playing: break
         }
 
-        // Portal cooldown
-        if portalCooldown > 0 { portalCooldown -= 1 }
+        // Fixed-step physics loop — runs as many 1/60s steps as time has accumulated
+        while accumulator >= fixedStep {
+            accumulator -= fixedStep
 
-        // Screen shake decay
-        if shakeTimer > 0 {
-            shakeTimer -= dt
-            let t = shakeTimer * 45
-            shakeX = sin(t) * 7 * (shakeTimer / 0.35)
-            shakeY = cos(t * 1.3) * 5 * (shakeTimer / 0.35)
-        } else {
-            shakeX = 0; shakeY = 0
-        }
+            // Portal cooldown
+            if portalCooldown > 0 { portalCooldown -= 1 }
 
-        // --- Physics ---
-        if mode == .ship {
-            // Ship: hold = thrust up, release = fall
-            let thrust: CGFloat = holding ? -1.1 : 0.0
-            velY += gravity * 0.55 + thrust
-            velY = max(-4, min(9, velY))  // clamp ship speed (cap up at -4 to prevent ceiling overshoot)
-        } else {
-            velY += gravity
-        }
-        playerY += velY
-        scrollX += scrollSpd
-        cubeAngle = scrollX * 0.09  // slow rotation as level scrolls
-        progress = min(1, scrollX / levelLen)
+            // Screen shake decay
+            if shakeTimer > 0 {
+                shakeTimer -= stepDt
+                let t = shakeTimer * 45
+                shakeX = sin(t) * 7 * (shakeTimer / 0.35)
+                shakeY = cos(t * 1.3) * 5 * (shakeTimer / 0.35)
+            } else {
+                shakeX = 0; shakeY = 0
+            }
 
-        // Ground — only if player is NOT over a floor gap
-        let floorY = groundY - playerH
-        let pLeftWorld  = scrollX + playerX
-        let pRightWorld = scrollX + playerX + playerW
-        let overGap = floorGaps.contains { pRightWorld > $0.start && pLeftWorld < $0.end }
-        if !overGap && playerY >= floorY {
-            playerY = floorY
-            velY = 0
-            onGround = true
-        } else if overGap {
-            onGround = false
-        } else {
-            onGround = false
-        }
+            // --- Physics ---
+            if mode == .ship {
+                let thrust: CGFloat = holding ? -1.1 : 0.0
+                velY += gravity * 0.55 + thrust
+                velY = max(-4, min(9, velY))
+            } else {
+                velY += gravity
+            }
+            playerY += velY
+            scrollX += scrollSpd
+            cubeAngle = scrollX * 0.09
+            progress = min(1, scrollX / levelLen)
 
-        // Ceiling kill
-        if playerY < -playerH {
-            die(size: size); return
-        }
+            // Ground — only if player is NOT over a floor gap
+            let floorY = groundY - playerH
+            let pLeftWorld  = scrollX + playerX
+            let pRightWorld = scrollX + playerX + playerW
+            let overGap = floorGaps.contains { pRightWorld > $0.start && pLeftWorld < $0.end }
+            if !overGap && playerY >= floorY {
+                playerY = floorY
+                velY = 0
+                onGround = true
+            } else if overGap {
+                onGround = false
+            } else {
+                onGround = false
+            }
 
-        // --- Obstacle collision ---
-        let pRect = CGRect(x: playerX, y: playerY, width: playerW, height: playerH)
-
-        for obs in obstacles {
-            let sx = obs.rect.minX - scrollX
-            let sRect = CGRect(x: sx, y: obs.rect.minY,
-                               width: obs.rect.width, height: obs.rect.height)
-
-            guard pRect.intersects(sRect) else { continue }
-
-            switch obs.kind {
-            case .spike, .ceilSpike:
+            // Ceiling kill
+            if playerY < -playerH {
                 die(size: size); return
+            }
 
-            case .portal:
-                // Switch modes (guarded by cooldown so we don't toggle every frame)
-                if portalCooldown <= 0 {
-                    if mode == .cube {
-                        mode = .ship
-                        velY = min(velY, -2)
-                    } else {
-                        mode = .cube
-                    }
-                    portalCooldown = 20
-                }
-                continue
+            // --- Obstacle collision ---
+            let pRect = CGRect(x: playerX, y: playerY, width: playerW, height: playerH)
 
-            case .jumpPad:
-                // Bounce — only trigger if coming down onto it
-                let prevBottom = playerY + playerH - velY
-                if prevBottom <= sRect.minY + 6 && velY >= 0 {
-                    playerY = sRect.minY - playerH
-                    velY = jumpVel * 1.35   // ~18% stronger than normal jump
-                    onGround = false
-                    spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH),
-                                   count: 10, speed: 2...5, life: 0.5,
-                                   colors: [.yellow, Color(red:1,green:0.8,blue:0), .white])
-                }
+            for obs in obstacles {
+                let sx = obs.rect.minX - scrollX
+                let sRect = CGRect(x: sx, y: obs.rect.minY,
+                                   width: obs.rect.width, height: obs.rect.height)
 
-            case .platform:
-                // One-way: only land on top, pass through from below/sides
-                let prevBottomPlat = playerY + playerH - velY
-                if prevBottomPlat <= sRect.minY + 4 && velY >= 0 {
-                    playerY = sRect.minY - playerH
-                    velY = 0
-                    onGround = true
-                }
+                guard pRect.intersects(sRect) else { continue }
 
-            case .block:
-                // Solid: land on top or die on sides/bottom
-                let prevBottom = playerY + playerH - velY
-                if prevBottom <= sRect.minY + 4 && velY >= 0 {
-                    playerY = sRect.minY - playerH
-                    velY = 0
-                    onGround = true
-                } else {
+                switch obs.kind {
+                case .spike, .ceilSpike:
                     die(size: size); return
+
+                case .portal:
+                    if portalCooldown <= 0 {
+                        if mode == .cube {
+                            mode = .ship
+                            velY = min(velY, -2)
+                        } else {
+                            mode = .cube
+                        }
+                        portalCooldown = 20
+                    }
+                    continue
+
+                case .jumpPad:
+                    let prevBottom = playerY + playerH - velY
+                    if prevBottom <= sRect.minY + 6 && velY >= 0 {
+                        playerY = sRect.minY - playerH
+                        velY = jumpVel * 1.35
+                        onGround = false
+                        spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH),
+                                       count: 10, speed: 2...5, life: 0.5,
+                                       colors: [.yellow, Color(red:1,green:0.8,blue:0), .white])
+                    }
+
+                case .platform:
+                    let prevBottomPlat = playerY + playerH - velY
+                    if prevBottomPlat <= sRect.minY + 4 && velY >= 0 {
+                        playerY = sRect.minY - playerH
+                        velY = 0
+                        onGround = true
+                    }
+
+                case .block:
+                    let prevBottom = playerY + playerH - velY
+                    if prevBottom <= sRect.minY + 4 && velY >= 0 {
+                        playerY = sRect.minY - playerH
+                        velY = 0
+                        onGround = true
+                    } else {
+                        die(size: size); return
+                    }
                 }
             }
-        }
 
-        // Fall off world
-        if playerY > groundY + 80 {
-            die(size: size); return
-        }
+            // Fall off world
+            if playerY > groundY + 80 {
+                die(size: size); return
+            }
 
-        // Victory
-        if scrollX >= levelLen {
-            state = .victory
-            victoryTimer = 0
-            spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH/2),
-                           count: 60, speed: 3...10, life: 2.5,
-                           colors: [.yellow, .cyan, Color(red:1,green:0.5,blue:0), .white,
-                                    Color(red:0.8,green:0,blue:1)])
-        }
+            // Victory
+            if scrollX >= levelLen {
+                state = .victory
+                victoryTimer = 0
+                spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH/2),
+                               count: 60, speed: 3...10, life: 2.5,
+                               colors: [.yellow, .cyan, Color(red:1,green:0.5,blue:0), .white,
+                                        Color(red:0.8,green:0,blue:1)])
+                return
+            }
 
-        updateParticles(dt: dt)
+            updateParticles(dt: stepDt)
+        }
     }
 
     func die(size: CGSize) {
