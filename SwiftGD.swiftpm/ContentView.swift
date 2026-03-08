@@ -5,8 +5,8 @@ fileprivate let playerW:    CGFloat = 30
 fileprivate let playerH:    CGFloat = 30
 fileprivate let gravity:    CGFloat = 0.65
 fileprivate let jumpVel:    CGFloat = -13.5
-fileprivate let scrollSpd:  CGFloat = 5
-fileprivate let levelLen:   CGFloat = 6500
+fileprivate let scrollSpd:  CGFloat = 10
+fileprivate let levelLen:   CGFloat = 10200
 fileprivate let groundH:    CGFloat = 50
 
 // MARK: - Types
@@ -14,7 +14,7 @@ fileprivate let groundH:    CGFloat = 50
 enum GDState  { case menu, playing, dead, victory }
 enum GameMode { case cube, ship }
 
-enum ObstacleKind { case spike, block, platform, ceilSpike, jumpPad, portal }
+enum ObstacleKind { case spike, block, platform, ceilSpike, jumpPad, portal, speedUp, slowDown, pit }
 
 struct GDObstacle {
     var rect: CGRect
@@ -49,7 +49,7 @@ class GDEngine: ObservableObject {
 
     // Player
     var playerX:   CGFloat = 120
-    var playerY:   CGFloat = 0
+    @Published var playerY: CGFloat = 0
     var velY:      CGFloat = 0
     var onGround:  Bool = false
     var cubeAngle: CGFloat = 0      // degrees, updated while scrolling
@@ -57,16 +57,17 @@ class GDEngine: ObservableObject {
     var holding:   Bool = false     // tap held (ship thrust)
 
     // World
-    var scrollX: CGFloat = 0
+    @Published var scrollX: CGFloat = 0
+    var currentScrollSpd: CGFloat = scrollSpd   // modified by speed zones
     var progress: CGFloat = 0
 
     // Obstacles & particles
-    var obstacles: [GDObstacle] = []
+    @Published var obstacles: [GDObstacle] = []
     var particles: [GDParticle] = []
     var stars: [GDStar] = []
 
     // Floor gaps: world-x ranges where floor is absent
-    var floorGaps: [(start: CGFloat, end: CGFloat)] = []
+    @Published var floorGaps: [(start: CGFloat, end: CGFloat)] = []
 
     // Screen shake
     var shakeTimer: CGFloat = 0
@@ -78,6 +79,9 @@ class GDEngine: ObservableObject {
     var deathPause: CGFloat = 0
     var victoryTimer: CGFloat = 0
     var lastDate: Date = Date()
+    var accumulator: Double = 0
+    var portalCooldown: Int = 0
+    var speedCooldown:  Int = 0
 
     // Set once from size
     var groundY: CGFloat = 400
@@ -86,12 +90,24 @@ class GDEngine: ObservableObject {
     // MARK: Setup
 
     func setup(size: CGSize) {
-        guard !sizeSet else { return }
-        sizeSet = true
-        groundY = size.height - groundH
-        playerY = groundY - playerH
-        buildLevel()
-        buildStars(size: size)
+        let newGroundY = size.height - groundH
+        if !sizeSet {
+            // First time: full initialisation
+            sizeSet = true
+            groundY = newGroundY
+            playerY = groundY - playerH
+            onGround = true
+            buildLevel()
+            buildStars(size: size)
+        } else if abs(newGroundY - groundY) > 20 {
+            // Orientation changed — rebuild level geometry and clamp player
+            groundY = newGroundY
+            buildLevel()
+            buildStars(size: size)
+            // Keep player above ground; if they were below the new ground just land them
+            playerY = min(playerY, groundY - playerH)
+            if playerY >= groundY - playerH { velY = 0; onGround = true }
+        }
     }
 
     func buildStars(size: CGSize) {
@@ -154,72 +170,36 @@ class GDEngine: ObservableObject {
                 rect: CGRect(x: x, y: 20, width: 24, height: gY - 20),
                 kind: .portal, colorIdx: 0))
         }
-        // Tunnel wall for ship section (ceiling or floor block the passage)
-        func twall(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) {
-            obstacles.append(GDObstacle(
-                rect: CGRect(x: x, y: y, width: w, height: h),
-                kind: .block, colorIdx: 2))
-        }
+        // Speed 10 level — jump arc: 41 frames, 410px horizontal
+        // Easy = 1000px apart (59 rest frames), Medium = 800px (39), Hard = 600px (19)
 
-        // ── Section 1: Tutorial — gentle single spikes ──────────── x 300–1150
-        spike(300); spike(480); spike(660); spike(840); spike(1020)
+        // ── Section 1: Tutorial — 2 easy spikes, 1000px apart ───────── x 900–1900
+        spike(900); spike(1900)
 
-        // ── Section 2: Double spikes + a jump pad ───────────────── x 1300–2100
-        for i in 0..<4 {
-            let bx = 1300 + CGFloat(i) * 200
-            spike(bx); spike(bx + 32)
-        }
-        pad(2000)   // teach the jump pad mechanic
+        // ── Section 2: Rhythm — 3 medium spikes, 800px apart ─────────── x 2700–4300
+        spike(2700); spike(3500); spike(4300)
 
-        // ── Section 3: Platforms + ceiling threat ───────────────── x 2300–3100
-        plat(2300, gY - 80,  150)
-        cSpike(2370, 30)
-        spike(2510)
-        plat(2600, gY - 130, 120)
-        cSpike(2640, 20)
-        plat(2820, gY - 80,  120)
-        spike(2980); spike(3012)
+        // ── Section 3: Platforms + ceiling threat ────────────────────── x 4900–5900
+        // Spike(5900) is the only required jump; platforms are optional skill content
+        plat(4900, gY - 90,  200)
+        cSpike(4960, 30)
+        plat(5400, gY - 130, 160)
+        cSpike(5450, 20)
+        spike(5900)
 
-        // ── Ship section: portal → narrow tunnel → return portal ─── x 3100–3300
-        portal(3100)  // cube → ship
-        // Tunnel: ceiling blocks force player to fly at mid-height
-        let tunnelY  = gY - 110   // ceiling of tunnel
-        let gapH: CGFloat = 80    // fly-through gap
-        twall(3140, 0,       180, tunnelY)            // upper wall (ceiling)
-        twall(3140, tunnelY + gapH, 180, gY - (tunnelY + gapH))  // lower wall (floor plug)
-        twall(3240, 0,       180, tunnelY - 20)       // narrower 2nd tunnel ceiling
-        twall(3240, tunnelY + gapH - 20, 180, 60)    // lower wall
-        portal(3290)  // ship → cube
+        // ── Ship section: portal → open fly zone → return portal ─────── x 6300–6600
+        portal(6300)
+        portal(6600)
 
-        // ── Section 4: Death pits ────────────────────────────────── x 3500–4300
-        // Floor gaps — player must jump over them
-        pit(3550, 3670)         // first pit
-        spike(3710)             // spike right after pit edge
-        pit(3900, 4020)         // second pit, wider
-        pad(4030)               // jump pad to clear next section
-        pit(4250, 4330)         // tight pit
+        // ── Section 4: Death pits — 2 pits + 1 spike ─────────────────── x 7100–8720
+        // Pit(7100): 39 rest from prev landing. Spike(7900): 39 rest. Pit(8500): 19 rest (hard)
+        pit(7100, 7320)
+        spike(7900)
+        pit(8500, 8720)
 
-        // ── Section 5: Block maze + ceiling spikes ───────────────── x 4500–5500
-        block(4500, gY - 60,  60,  60, 1)
-        spike(4610); spike(4642)
-        block(4750, gY - 90,  60,  90, 2)
-        cSpike(4770, 15)
-        spike(4860); spike(4892); spike(4924)
-        block(5000, gY - 60,  60,  60, 1)
-        spike(5110)
-        plat(5250, gY - 110, 120)
-        cSpike(5280, 25)
-        spike(5400); spike(5432)
-
-        // ── Section 6: Final gauntlet ────────────────────────────── x 5700–6400
-        for i in 0..<6 {
-            let bx = 5700 + CGFloat(i) * 130
-            spike(bx, i % 3)
-            if i % 2 == 0 { spike(bx + 32, (i+1) % 3) }
-        }
-        pit(6300, 6400)
-        spike(6430); spike(6462); spike(6494)
-        pad(6380)
+        // ── Section 5: Final gauntlet — 2 hard spikes ────────────────── x 9100–9700
+        // Each 600px apart = 19 rest frames (hard). Level ends before next required jump.
+        spike(9100, 0); spike(9700, 1)
     }
 
     // MARK: Input
@@ -260,133 +240,183 @@ class GDEngine: ObservableObject {
         let now = Date()
         let rawDt = now.timeIntervalSince(lastDate)
         lastDate = now
-        let dt = CGFloat(min(rawDt, 0.05))
+        // Cap to avoid spiral-of-death after backgrounding
+        accumulator += min(rawDt, 0.1)
 
+        let fixedStep: Double = 1.0 / 60.0
+        let stepDt = CGFloat(fixedStep)
+
+        // Non-playing states: update with real dt, no fixed step needed
         switch state {
-        case .menu: return
+        case .menu:
+            accumulator = 0
+            return
         case .dead:
+            let dt = CGFloat(min(rawDt, 0.05))
             updateParticles(dt: dt)
             deathFlash = max(0, deathFlash - dt * 2.5)
             deathPause -= dt
             if deathPause <= 0 { restartGame() }
+            accumulator = 0
             return
         case .victory:
+            let dt = CGFloat(min(rawDt, 0.05))
             victoryTimer += dt
             updateParticles(dt: dt)
+            accumulator = 0
             return
         case .playing: break
         }
 
-        // Screen shake decay
-        if shakeTimer > 0 {
-            shakeTimer -= dt
-            let t = shakeTimer * 45
-            shakeX = sin(t) * 7 * (shakeTimer / 0.35)
-            shakeY = cos(t * 1.3) * 5 * (shakeTimer / 0.35)
-        } else {
-            shakeX = 0; shakeY = 0
-        }
+        // Fixed-step physics loop — runs as many 1/60s steps as time has accumulated
+        while accumulator >= fixedStep {
+            accumulator -= fixedStep
 
-        // --- Physics ---
-        if mode == .ship {
-            // Ship: hold = thrust up, release = fall
-            let thrust: CGFloat = holding ? -1.1 : 0.0
-            velY += gravity * 0.55 + thrust
-            velY = max(-9, min(9, velY))  // clamp ship speed
-        } else {
-            velY += gravity
-        }
-        playerY += velY
-        scrollX += scrollSpd
-        cubeAngle = scrollX * 0.09  // slow rotation as level scrolls
-        progress = min(1, scrollX / levelLen)
+            // Portal cooldown
+            if portalCooldown > 0 { portalCooldown -= 1 }
+            if speedCooldown  > 0 { speedCooldown  -= 1 }
 
-        // Ground — only if player is NOT over a floor gap
-        let floorY = groundY - playerH
-        let pLeftWorld  = scrollX + playerX
-        let pRightWorld = scrollX + playerX + playerW
-        let overGap = floorGaps.contains { pRightWorld > $0.start && pLeftWorld < $0.end }
-        if !overGap && playerY >= floorY {
-            playerY = floorY
-            velY = 0
-            onGround = true
-        } else if overGap {
-            onGround = false
-        } else {
-            onGround = false
-        }
+            // Screen shake decay
+            if shakeTimer > 0 {
+                shakeTimer -= stepDt
+                let t = shakeTimer * 45
+                shakeX = sin(t) * 7 * (shakeTimer / 0.35)
+                shakeY = cos(t * 1.3) * 5 * (shakeTimer / 0.35)
+            } else {
+                shakeX = 0; shakeY = 0
+            }
 
-        // Ceiling kill
-        if playerY < -playerH {
-            die(size: size); return
-        }
+            // --- Physics ---
+            if mode == .ship {
+                let thrust: CGFloat = holding ? -1.1 : 0.0
+                velY += gravity * 0.55 + thrust
+                velY = max(-4, min(9, velY))
+            } else {
+                velY += gravity
+            }
+            playerY += velY
+            scrollX += currentScrollSpd
+            cubeAngle = scrollX * 0.09
+            progress = min(1, scrollX / levelLen)
 
-        // --- Obstacle collision ---
-        let pRect = CGRect(x: playerX, y: playerY, width: playerW, height: playerH)
+            // Ground — only if player is NOT over a floor gap
+            let floorY = groundY - playerH
+            let pLeftWorld  = scrollX + playerX
+            let pRightWorld = scrollX + playerX + playerW
+            let overGap = floorGaps.contains { pRightWorld > $0.start && pLeftWorld < $0.end }
+            if !overGap && playerY >= floorY {
+                playerY = floorY
+                velY = 0
+                onGround = true
+            } else if overGap {
+                onGround = false
+            } else {
+                onGround = false
+            }
 
-        for obs in obstacles {
-            let sx = obs.rect.minX - scrollX
-            let sRect = CGRect(x: sx, y: obs.rect.minY,
-                               width: obs.rect.width, height: obs.rect.height)
-
-            guard pRect.intersects(sRect) else { continue }
-
-            switch obs.kind {
-            case .spike, .ceilSpike:
+            // Ceiling kill
+            if playerY < -playerH {
                 die(size: size); return
+            }
 
-            case .portal:
-                // Switch modes
-                if mode == .cube {
-                    mode = .ship
-                    velY = min(velY, -2)  // slight upward nudge on entry
-                } else {
-                    mode = .cube
-                }
-                continue  // don't die or land, just pass through
+            // --- Obstacle collision ---
+            let pRect = CGRect(x: playerX, y: playerY, width: playerW, height: playerH)
 
-            case .jumpPad:
-                // Bounce — only trigger if coming down onto it
-                let prevBottom = playerY + playerH - velY
-                if prevBottom <= sRect.minY + 6 && velY >= 0 {
-                    playerY = sRect.minY - playerH
-                    velY = jumpVel * 1.35   // ~18% stronger than normal jump
-                    onGround = false
-                    spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH),
-                                   count: 10, speed: 2...5, life: 0.5,
-                                   colors: [.yellow, Color(red:1,green:0.8,blue:0), .white])
-                }
+            for obs in obstacles {
+                let sx = obs.rect.minX - scrollX
+                let sRect = CGRect(x: sx, y: obs.rect.minY,
+                                   width: obs.rect.width, height: obs.rect.height)
 
-            case .block, .platform:
-                // Land on top if coming down
-                let prevBottom = playerY + playerH - velY
-                if prevBottom <= sRect.minY + 4 && velY >= 0 {
-                    playerY = sRect.minY - playerH
-                    velY = 0
-                    onGround = true
-                } else {
-                    // Side / bottom collision = death
+                guard pRect.intersects(sRect) else { continue }
+
+                switch obs.kind {
+                case .spike, .ceilSpike:
                     die(size: size); return
+
+                case .portal:
+                    if portalCooldown <= 0 {
+                        if mode == .cube {
+                            mode = .ship
+                            velY = min(velY, -2)
+                        } else {
+                            mode = .cube
+                        }
+                        portalCooldown = 20
+                    }
+                    continue
+
+                case .speedUp:
+                    if speedCooldown <= 0 {
+                        currentScrollSpd = scrollSpd * 2
+                        speedCooldown = 20
+                        spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH/2),
+                                       count: 8, speed: 3...7, life: 0.4,
+                                       colors: [.yellow, .orange, .white])
+                    }
+                    continue
+
+                case .slowDown:
+                    if speedCooldown <= 0 {
+                        currentScrollSpd = scrollSpd * 0.5
+                        speedCooldown = 20
+                        spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH/2),
+                                       count: 8, speed: 1...3, life: 0.4,
+                                       colors: [.cyan, Color(red: 0.5, green: 0, blue: 1), .white])
+                    }
+                    continue
+
+                case .jumpPad:
+                    // Trigger whenever player is on top of pad (not while rising from a jump)
+                    if velY >= 0 {
+                        playerY = sRect.minY - playerH
+                        velY = jumpVel * 1.35
+                        onGround = false
+                        spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH),
+                                       count: 10, speed: 2...5, life: 0.5,
+                                       colors: [.yellow, Color(red:1,green:0.8,blue:0), .white])
+                    }
+
+                case .platform:
+                    let prevBottomPlat = playerY + playerH - velY
+                    if prevBottomPlat <= sRect.minY + 4 && velY >= 0 {
+                        playerY = sRect.minY - playerH
+                        velY = 0
+                        onGround = true
+                    }
+
+                case .block:
+                    let prevBottom = playerY + playerH - velY
+                    if prevBottom <= sRect.minY + 4 && velY >= 0 {
+                        playerY = sRect.minY - playerH
+                        velY = 0
+                        onGround = true
+                    } else {
+                        die(size: size); return
+                    }
+
+                case .pit:
+                    break  // pits are floor gaps; collision handled by fall-off check
                 }
             }
-        }
 
-        // Fall off world
-        if playerY > groundY + 80 {
-            die(size: size); return
-        }
+            // Fall off world
+            if playerY > groundY + 80 {
+                die(size: size); return
+            }
 
-        // Victory
-        if scrollX >= levelLen {
-            state = .victory
-            victoryTimer = 0
-            spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH/2),
-                           count: 60, speed: 3...10, life: 2.5,
-                           colors: [.yellow, .cyan, Color(red:1,green:0.5,blue:0), .white,
-                                    Color(red:0.8,green:0,blue:1)])
-        }
+            // Victory
+            if scrollX >= levelLen {
+                state = .victory
+                victoryTimer = 0
+                spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH/2),
+                               count: 60, speed: 3...10, life: 2.5,
+                               colors: [.yellow, .cyan, Color(red:1,green:0.5,blue:0), .white,
+                                        Color(red:0.8,green:0,blue:1)])
+                return
+            }
 
-        updateParticles(dt: dt)
+            updateParticles(dt: stepDt)
+        }
     }
 
     func die(size: CGSize) {
@@ -405,9 +435,12 @@ class GDEngine: ObservableObject {
         velY = 0
         scrollX = 0
         progress = 0
-        onGround = false
+        onGround = true
         mode = .cube
         holding = false
+        portalCooldown = 0
+        speedCooldown = 0
+        currentScrollSpd = scrollSpd
         particles = []
         deathFlash = 0
         shakeTimer = 0
@@ -443,11 +476,13 @@ class GDEngine: ObservableObject {
 
     // MARK: - Editor
 
-    var editorOpen        = false
-    var editorScrollX:    CGFloat = 0
-    var selectedKind:     ObstacleKind = .spike
-    var editorEraseMode   = false
-    var customObstacles:  [GDObstacle] = []
+    @Published var editorOpen             = false
+    @Published var editorScrollX:         CGFloat = 0
+    @Published var selectedKind:          ObstacleKind = .spike
+    @Published var selectedSpikeColor:    Int = 0   // index into spikeColors; default cyan
+    @Published var selectedCeilSpikeColor:Int = 1   // index into spikeColors; default pink
+    @Published var editorEraseMode        = false
+    @Published var customObstacles:       [GDObstacle] = []
 
     func openEditor() {
         // Rebuild clean built-in level, preserve custom
@@ -460,8 +495,14 @@ class GDEngine: ObservableObject {
     }
 
     func editorTest() {
-        // Merge custom obstacles into main level then play
-        obstacles.append(contentsOf: customObstacles)
+        // Convert pit obstacles to floor gaps; merge the rest into main level
+        for obs in customObstacles {
+            if obs.kind == .pit {
+                floorGaps.append((start: obs.rect.minX, end: obs.rect.maxX))
+            } else {
+                obstacles.append(obs)
+            }
+        }
         editorOpen = false
         restartGame()
     }
@@ -475,38 +516,53 @@ class GDEngine: ObservableObject {
         let worldX = pos.x + editorScrollX
         let gY     = groundY
 
+        // Canvas Y → game world Y (inverse of yScale used in renderEditor)
+        let canvasGroundY = size.height - groundH
+        let yScale = groundY > 0 ? canvasGroundY / groundY : 1.0
+        let gameY = pos.y / yScale
+
         if editorEraseMode {
-            // Remove the first custom obstacle whose rect contains tap
+            // Remove the first custom obstacle whose game-world rect contains tap
             customObstacles.removeAll { obs in
-                obs.rect.insetBy(dx: -10, dy: -10).contains(CGPoint(x: worldX, y: pos.y))
+                obs.rect.insetBy(dx: -10, dy: -10).contains(CGPoint(x: worldX, y: gameY))
             }
             return
         }
 
         // Snap X to 40pt grid
         let snappedX = (worldX / 40).rounded(.down) * 40
+
         let obs: GDObstacle
         switch selectedKind {
         case .spike:
             obs = GDObstacle(rect: CGRect(x: snappedX + 2, y: gY - 30, width: 26, height: 29),
-                             kind: .spike, colorIdx: 0)
+                             kind: .spike, colorIdx: selectedSpikeColor)
         case .block:
-            let ty = (pos.y / 40).rounded(.down) * 40
+            let ty = (gameY / 40).rounded(.down) * 40
             obs = GDObstacle(rect: CGRect(x: snappedX, y: ty, width: 60, height: 60),
                              kind: .block, colorIdx: 1)
         case .platform:
-            let ty = (pos.y / 40).rounded(.down) * 40
+            let ty = (gameY / 40).rounded(.down) * 40
             obs = GDObstacle(rect: CGRect(x: snappedX, y: ty, width: 120, height: 12),
                              kind: .platform, colorIdx: 2)
         case .ceilSpike:
             obs = GDObstacle(rect: CGRect(x: snappedX + 2, y: 20, width: 26, height: 29),
-                             kind: .ceilSpike, colorIdx: 1)
+                             kind: .ceilSpike, colorIdx: selectedCeilSpikeColor)
         case .jumpPad:
             obs = GDObstacle(rect: CGRect(x: snappedX, y: gY - 18, width: 36, height: 18),
                              kind: .jumpPad, colorIdx: 0)
         case .portal:
             obs = GDObstacle(rect: CGRect(x: snappedX, y: 20, width: 24, height: gY - 20),
                              kind: .portal, colorIdx: 0)
+        case .speedUp:
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: 0, width: 30, height: gY),
+                             kind: .speedUp, colorIdx: 0)
+        case .slowDown:
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: 0, width: 30, height: gY),
+                             kind: .slowDown, colorIdx: 0)
+        case .pit:
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: gY, width: 160, height: groundH),
+                             kind: .pit, colorIdx: 0)
         }
         customObstacles.append(obs)
     }
@@ -546,19 +602,10 @@ struct GameView: View {
                     Canvas { ctx, size in
                         renderFrame(ctx: ctx, size: size, engine: engine)
                     }
-                    .onChange(of: tl.date) { _ in
+                    .onChange(of: tl.date) {
                         engine.tick(size: geo.size)
                     }
                 }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { _ in
-                            engine.touchDown()
-                            engine.tap()
-                        }
-                        .onEnded { _ in engine.touchUp() }
-                )
 
                 // "Edit Level" on menu, "Return to Editor" on dead/victory
                 if engine.state == .menu {
@@ -572,6 +619,15 @@ struct GameView: View {
                         .padding(.bottom, 20)
                 }
             }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        engine.touchDown()
+                        engine.tap()
+                    }
+                    .onEnded { _ in engine.touchUp() }
+            )
         }
         .background(Color.black)
         .ignoresSafeArea()
@@ -597,64 +653,133 @@ struct GDButtonStyle: ButtonStyle {
 struct EditorView: View {
     @ObservedObject var engine: GDEngine
     @State private var scrollStart: CGFloat = 0
+    @State private var movingIdx: Int? = nil   // index in customObstacles being dragged
+    @State private var isPanning = false
 
     let kindOptions: [(ObstacleKind, String)] = [
         (.spike,    "▲ Spike"),
-        (.block,    "■ Block"),
-        (.platform, "— Plat"),
         (.ceilSpike,"▼ C.Spike"),
         (.jumpPad,  "⬆ Pad"),
+        (.pit,      "▽ Pit"),
+        (.platform, "— Plat"),
+        (.block,    "■ Block"),
         (.portal,   "⬡ Portal"),
+        (.speedUp,  "⚡ 2×"),
+        (.slowDown, "↓ ½×"),
     ]
 
     var body: some View {
         VStack(spacing: 0) {
-            // ── Top toolbar: obstacle type picker ──
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    // Erase toggle
-                    Button(engine.editorEraseMode ? "✕ Erase ON" : "✕ Erase") {
-                        engine.editorEraseMode.toggle()
-                    }
-                    .buttonStyle(GDButtonStyle(color: engine.editorEraseMode
-                        ? Color(red: 0.9, green: 0.1, blue: 0.1)
-                        : Color(red: 0.3, green: 0.1, blue: 0.4)))
+            // ── Top toolbar: wrapping grid so all buttons visible in any orientation ──
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 80, maximum: 130))], spacing: 6) {
+                // Erase toggle
+                Button(engine.editorEraseMode ? "✕ Erase ON" : "✕ Erase") {
+                    engine.editorEraseMode.toggle()
+                }
+                .buttonStyle(GDButtonStyle(color: engine.editorEraseMode
+                    ? Color(red: 0.9, green: 0.1, blue: 0.1)
+                    : Color(red: 0.3, green: 0.1, blue: 0.4)))
 
-                    ForEach(kindOptions, id: \.1) { (kind, label) in
-                        Button(label) {
-                            engine.selectedKind = kind
-                            engine.editorEraseMode = false
+                ForEach(kindOptions, id: \.1) { (kind, label) in
+                    Button(label) {
+                        engine.selectedKind = kind
+                        engine.editorEraseMode = false
+                    }
+                    .buttonStyle(GDButtonStyle(
+                        color: engine.selectedKind == kind && !engine.editorEraseMode
+                            ? Color(red: 0, green: 0.6, blue: 1)
+                            : Color(red: 0.15, green: 0.15, blue: 0.3)))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(red: 0.05, green: 0.05, blue: 0.18))
+
+            // ── Spike color picker (shown when spike or ceilSpike selected) ──
+            if engine.selectedKind == .spike || engine.selectedKind == .ceilSpike {
+                let isCeil = engine.selectedKind == .ceilSpike
+                let selectedColor = isCeil ? engine.selectedCeilSpikeColor : engine.selectedSpikeColor
+                HStack(spacing: 10) {
+                    Text(isCeil ? "Ceiling color:" : "Spike color:")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.7))
+                    ForEach(0..<spikeColors.count, id: \.self) { i in
+                        Button(action: {
+                            if isCeil { engine.selectedCeilSpikeColor = i }
+                            else       { engine.selectedSpikeColor    = i }
+                        }) {
+                            Circle()
+                                .fill(spikeColors[i])
+                                .frame(width: 22, height: 22)
+                                .overlay(Circle().stroke(Color.white, lineWidth: selectedColor == i ? 2.5 : 0))
+                                .shadow(color: spikeColors[i], radius: selectedColor == i ? 4 : 0)
                         }
-                        .buttonStyle(GDButtonStyle(
-                            color: engine.selectedKind == kind && !engine.editorEraseMode
-                                ? Color(red: 0, green: 0.6, blue: 1)
-                                : Color(red: 0.15, green: 0.15, blue: 0.3)))
                     }
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(red: 0.05, green: 0.05, blue: 0.18))
             }
-            .background(Color(red: 0.05, green: 0.05, blue: 0.18))
 
             // ── Editor canvas ──
             GeometryReader { geo in
-                Canvas { ctx, size in
-                    renderEditor(ctx: ctx, size: size, engine: engine)
+                TimelineView(.periodic(from: .now, by: 1.0/30.0)) { _ in
+                    Canvas { ctx, size in
+                        renderEditor(ctx: ctx, size: size, engine: engine)
+                    }
                 }
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { v in
-                            if abs(v.translation.width) > 10 || abs(v.translation.height) > 10 {
+                            let canvasGroundY = geo.size.height - groundH
+                            let yScale: CGFloat = engine.groundY > 0 ? canvasGroundY / engine.groundY : 1
+
+                            // Decide mode on first significant movement or immediately if on an obstacle
+                            if movingIdx == nil && !isPanning {
+                                let startWorldX = v.startLocation.x + engine.editorScrollX
+                                let startGameY  = v.startLocation.y / yScale
+                                let hitPt = CGPoint(x: startWorldX, y: startGameY)
+                                if !engine.editorEraseMode,
+                                   let idx = engine.customObstacles.indices.first(where: {
+                                    engine.customObstacles[$0].rect.insetBy(dx: -10, dy: -10).contains(hitPt)
+                                }) {
+                                    movingIdx = idx
+                                } else if abs(v.translation.width) > 10 || abs(v.translation.height) > 10 {
+                                    isPanning = true
+                                }
+                            }
+
+                            if let idx = movingIdx {
+                                // Move the obstacle: X always snapped to grid; Y only for block/platform
+                                let worldX = v.location.x + engine.editorScrollX
+                                let snappedX = (worldX / 40).rounded(.down) * 40
+                                var obs = engine.customObstacles[idx]
+                                let xOff: CGFloat = (obs.kind == .spike || obs.kind == .ceilSpike) ? 2 : 0
+                                var newY = obs.rect.minY
+                                if obs.kind == .block || obs.kind == .platform {
+                                    let gameY = v.location.y / yScale
+                                    newY = (gameY / 40).rounded(.down) * 40
+                                }
+                                obs.rect = CGRect(x: snappedX + xOff, y: newY,
+                                                  width: obs.rect.width, height: obs.rect.height)
+                                // Reassign array to trigger @Published
+                                var arr = engine.customObstacles
+                                arr[idx] = obs
+                                engine.customObstacles = arr
+                            } else if isPanning {
                                 engine.editorScrollX = max(0, scrollStart - v.translation.width)
                             }
                         }
                         .onEnded { v in
-                            let dist = hypot(v.translation.width, v.translation.height)
-                            if dist < 10 {
-                                engine.editorAction(at: v.location, size: geo.size)
+                            if movingIdx != nil {
+                                movingIdx = nil
+                            } else if !isPanning {
+                                engine.editorAction(at: v.startLocation, size: geo.size)
                             } else {
                                 scrollStart = engine.editorScrollX
                             }
+                            isPanning = false
                         }
                 )
                 .onAppear { scrollStart = engine.editorScrollX }
@@ -899,7 +1024,7 @@ fileprivate func drawObstacles(ctx: GraphicsContext, size: CGSize, engine: GDEng
 
         case .ceilSpike:
             // Inverted triangle (tip points down)
-            let col = Color(red: 1, green: 0.2, blue: 0.5)
+            let col = spikeColors[obs.colorIdx % spikeColors.count]
             let triPath = Path { p in
                 p.move(to: CGPoint(x: sr.minX,  y: sr.minY))  // top-left
                 p.addLine(to: CGPoint(x: sr.maxX,  y: sr.minY))  // top-right
@@ -959,6 +1084,29 @@ fileprivate func drawObstacles(ctx: GraphicsContext, size: CGSize, engine: GDEng
             }
             ctx.fill(chevron, with: .color(padCol))
             ctx.stroke(chevron, with: .color(.white.opacity(0.7)), lineWidth: 1)
+
+        case .pit:
+            break  // rendered as a floor gap, not a drawable obstacle
+
+        case .speedUp:
+            let speedCol = Color(red: 1, green: 0.7, blue: 0)
+            ctx.stroke(Path(sr), with: .color(speedCol), lineWidth: 2.5)
+            ctx.drawLayer { c in
+                c.opacity = 0.25
+                c.fill(Path(sr), with: .color(speedCol))
+            }
+            let lbl = Text("2×").font(.system(size: 11, weight: .bold)).foregroundColor(speedCol)
+            ctx.draw(lbl, at: CGPoint(x: sr.midX, y: sr.midY), anchor: .center)
+
+        case .slowDown:
+            let slowCol = Color(red: 0.3, green: 0.6, blue: 1)
+            ctx.stroke(Path(sr), with: .color(slowCol), lineWidth: 2.5)
+            ctx.drawLayer { c in
+                c.opacity = 0.25
+                c.fill(Path(sr), with: .color(slowCol))
+            }
+            let lbl2 = Text("½").font(.system(size: 11, weight: .bold)).foregroundColor(slowCol)
+            ctx.draw(lbl2, at: CGPoint(x: sr.midX, y: sr.midY), anchor: .center)
         }
     }
 }
@@ -1115,8 +1263,10 @@ fileprivate func drawHUD(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
         .foregroundColor(.white.opacity(0.7))
     ctx.draw(attText, at: CGPoint(x: 20, y: 32), anchor: .topLeading)
 
-    // Mode indicator
-    let modeLabel = engine.mode == .ship ? "✈ SHIP" : "▣ CUBE"
+    // Mode + speed indicator
+    let speedRatio = engine.currentScrollSpd / scrollSpd
+    let speedTag = speedRatio > 1.1 ? " ⚡2×" : speedRatio < 0.9 ? " 🐢½×" : ""
+    let modeLabel = (engine.mode == .ship ? "✈ SHIP" : "▣ CUBE") + speedTag
     let modeColor: Color = engine.mode == .ship ?
         Color(red: 0.2, green: 0.8, blue: 1) : Color(red: 0.1, green: 1, blue: 0.5)
     let modeText = Text(modeLabel)
@@ -1159,7 +1309,12 @@ fileprivate func renderEditor(ctx: GraphicsContext, size: CGSize, engine: GDEngi
              with: .color(Color(red: 0.04, green: 0.04, blue: 0.14)))
 
     let scroll = engine.editorScrollX
-    let gY     = engine.groundY
+
+    // Y scaling: game world uses full-screen groundY, but editor canvas is
+    // shorter (toolbars eat into height). Scale all Y coords proportionally.
+    let gameGroundY = engine.groundY > 0 ? engine.groundY : size.height - groundH
+    let gY = size.height - groundH          // where the ground sits in this canvas
+    let yScale = gY / gameGroundY           // e.g. 250/343 ≈ 0.73
 
     // Grid lines
     let gsp: CGFloat = 40
@@ -1219,22 +1374,37 @@ fileprivate func renderEditor(ctx: GraphicsContext, size: CGSize, engine: GDEngi
         ctx.draw(endLbl, at: CGPoint(x: endX + 4, y: 18), anchor: .topLeading)
     }
 
-    // Draw built-in obstacles (dim)
+    // Helper: convert a game-world rect to editor-canvas rect
+    func editorRect(_ r: CGRect) -> CGRect {
+        CGRect(x: r.minX - scroll, y: r.minY * yScale, width: r.width, height: r.height * yScale)
+    }
+
+    // Draw pits (floor gaps) as red cutouts
+    for gap in engine.floorGaps {
+        let sx = gap.start - scroll
+        let ex = gap.end - scroll
+        guard ex > 0 && sx < size.width else { continue }
+        let pitRect = CGRect(x: sx, y: gY, width: ex - sx, height: size.height - gY)
+        ctx.fill(Path(pitRect), with: .color(Color(red: 0.5, green: 0, blue: 0).opacity(0.9)))
+        ctx.stroke(Path(pitRect), with: .color(Color(red: 1, green: 0.2, blue: 0.2)), lineWidth: 2)
+        let lbl = Text("PIT").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundColor(.red)
+        ctx.draw(lbl, at: CGPoint(x: max(sx, 0) + 4, y: gY + 4), anchor: .topLeading)
+    }
+
+    // Draw built-in obstacles (dimmed — not editable)
     for obs in engine.obstacles {
-        let sx = obs.rect.minX - scroll
-        guard sx > -obs.rect.width && sx < size.width else { continue }
-        let sr = CGRect(x: sx, y: obs.rect.minY, width: obs.rect.width, height: obs.rect.height)
+        let sr = editorRect(obs.rect)
+        guard sr.minX > -sr.width && sr.minX < size.width else { continue }
         ctx.drawLayer { c in
-            c.opacity = 0.45
+            c.opacity = 0.85
             drawObstacleShape(ctx: c, obs: obs, sr: sr)
         }
     }
 
-    // Draw custom obstacles (bright, with orange outline)
+    // Draw custom obstacles (full brightness + orange outline — editable)
     for obs in engine.customObstacles {
-        let sx = obs.rect.minX - scroll
-        guard sx > -obs.rect.width && sx < size.width else { continue }
-        let sr = CGRect(x: sx, y: obs.rect.minY, width: obs.rect.width, height: obs.rect.height)
+        let sr = editorRect(obs.rect)
+        guard sr.minX > -sr.width && sr.minX < size.width else { continue }
         drawObstacleShape(ctx: ctx, obs: obs, sr: sr)
         ctx.stroke(Path(sr.insetBy(dx: -2, dy: -2)),
                    with: .color(Color(red: 1, green: 0.6, blue: 0)), lineWidth: 2)
@@ -1262,7 +1432,7 @@ fileprivate func drawObstacleShape(ctx: GraphicsContext, obs: GDObstacle, sr: CG
         ctx.fill(path, with: .color(col))
         ctx.stroke(path, with: .color(.white.opacity(0.4)), lineWidth: 1)
     case .ceilSpike:
-        let col = Color(red: 1, green: 0.2, blue: 0.5)
+        let col = spikeColors[obs.colorIdx % spikeColors.count]
         let path = Path { p in
             p.move(to: CGPoint(x: sr.minX, y: sr.minY))
             p.addLine(to: CGPoint(x: sr.maxX, y: sr.minY))
@@ -1288,5 +1458,29 @@ fileprivate func drawObstacleShape(ctx: GraphicsContext, obs: GDObstacle, sr: CG
             c.opacity = 0.2
             c.fill(Path(sr), with: .color(Color(red: 0.7, green: 0.1, blue: 1)))
         }
+    case .speedUp:
+        let speedCol = Color(red: 1, green: 0.7, blue: 0)
+        ctx.stroke(Path(sr), with: .color(speedCol), lineWidth: 2.5)
+        ctx.drawLayer { c in
+            c.opacity = 0.25
+            c.fill(Path(sr), with: .color(speedCol))
+        }
+        let lbl = Text("2×").font(.system(size: 11, weight: .bold)).foregroundColor(speedCol)
+        ctx.draw(lbl, at: CGPoint(x: sr.midX, y: sr.midY), anchor: .center)
+    case .slowDown:
+        let slowCol = Color(red: 0.3, green: 0.6, blue: 1)
+        ctx.stroke(Path(sr), with: .color(slowCol), lineWidth: 2.5)
+        ctx.drawLayer { c in
+            c.opacity = 0.25
+            c.fill(Path(sr), with: .color(slowCol))
+        }
+        let lbl2 = Text("½").font(.system(size: 11, weight: .bold)).foregroundColor(slowCol)
+        ctx.draw(lbl2, at: CGPoint(x: sr.midX, y: sr.midY), anchor: .center)
+    case .pit:
+        let pitCol = Color(red: 0.8, green: 0.1, blue: 0.1)
+        ctx.fill(Path(sr), with: .color(pitCol.opacity(0.7)))
+        ctx.stroke(Path(sr), with: .color(pitCol), lineWidth: 2)
+        let pitLbl = Text("PIT").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundColor(.red)
+        ctx.draw(pitLbl, at: CGPoint(x: sr.midX, y: sr.midY), anchor: .center)
     }
 }

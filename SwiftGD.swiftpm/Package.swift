@@ -16,6 +16,8 @@ let package = Package(
         .iOSApplication(
             name: "SwiftGD",
             targets: ["AppModule"],
+            bundleIdentifier: "PaesLemeGD",
+            teamIdentifier: "J8D7WJR5PY",
             displayVersion: "1.0",
             bundleVersion: "1",
             appIcon: .placeholder(icon: .star),
