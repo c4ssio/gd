@@ -6,7 +6,7 @@ fileprivate let playerH:    CGFloat = 30
 fileprivate let gravity:    CGFloat = 0.65
 fileprivate let jumpVel:    CGFloat = -13.5
 fileprivate let scrollSpd:  CGFloat = 5
-fileprivate let levelLen:   CGFloat = 6500
+fileprivate let levelLen:   CGFloat = 7200
 fileprivate let groundH:    CGFloat = 50
 
 // MARK: - Types
@@ -161,65 +161,64 @@ class GDEngine: ObservableObject {
                 kind: .block, colorIdx: 2))
         }
 
-        // ── Section 1: Tutorial — gentle single spikes ──────────── x 300–1150
-        spike(300); spike(480); spike(660); spike(840); spike(1020)
+        // ── Section 1: Tutorial — gentle single spikes ──────────── x 800–1550
+        spike(800); spike(980); spike(1160); spike(1340); spike(1520)
 
-        // ── Section 2: Double spikes + a jump pad ───────────────── x 1300–2100
+        // ── Section 2: Double spikes + a jump pad ───────────────── x 1800–2600
         for i in 0..<4 {
-            let bx = 1300 + CGFloat(i) * 200
+            let bx = 1800 + CGFloat(i) * 200
             spike(bx); spike(bx + 32)
         }
-        pad(2000)   // teach the jump pad mechanic
+        pad(2500)   // teach the jump pad mechanic
 
-        // ── Section 3: Platforms + ceiling threat ───────────────── x 2300–3100
-        plat(2300, gY - 80,  150)
-        cSpike(2370, 30)
-        spike(2510)
-        plat(2600, gY - 130, 120)
-        cSpike(2640, 20)
-        plat(2820, gY - 80,  120)
-        spike(2980); spike(3012)
+        // ── Section 3: Platforms + ceiling threat ───────────────── x 2800–3600
+        plat(2800, gY - 80,  150)
+        cSpike(2870, 30)
+        spike(3010)
+        plat(3100, gY - 130, 120)
+        cSpike(3140, 20)
+        plat(3320, gY - 80,  120)
+        spike(3480); spike(3512)
 
-        // ── Ship section: portal → narrow tunnel → return portal ─── x 3100–3300
-        portal(3100)  // cube → ship
+        // ── Ship section: portal → narrow tunnel → return portal ─── x 3700–3900
+        portal(3700)  // cube → ship
         // Tunnel: ceiling blocks force player to fly at mid-height
         let tunnelY  = gY - 110   // ceiling of tunnel
         let gapH: CGFloat = 80    // fly-through gap
-        twall(3140, 0,       180, tunnelY)            // upper wall (ceiling)
-        twall(3140, tunnelY + gapH, 180, gY - (tunnelY + gapH))  // lower wall (floor plug)
-        twall(3240, 0,       180, tunnelY - 20)       // narrower 2nd tunnel ceiling
-        twall(3240, tunnelY + gapH - 20, 180, 60)    // lower wall
-        portal(3290)  // ship → cube
+        twall(3740, 0,       180, tunnelY)            // upper wall (ceiling)
+        twall(3740, tunnelY + gapH, 180, gY - (tunnelY + gapH))  // lower wall (floor plug)
+        twall(3840, 0,       180, tunnelY - 20)       // narrower 2nd tunnel ceiling
+        twall(3840, tunnelY + gapH - 20, 180, 60)    // lower wall
+        portal(3890)  // ship → cube
 
-        // ── Section 4: Death pits ────────────────────────────────── x 3500–4300
-        // Floor gaps — player must jump over them
-        pit(3550, 3670)         // first pit
-        spike(3710)             // spike right after pit edge
-        pit(3900, 4020)         // second pit, wider
-        pad(4030)               // jump pad to clear next section
-        pit(4250, 4330)         // tight pit
+        // ── Section 4: Death pits ────────────────────────────────── x 4100–4900
+        pit(4150, 4270)         // first pit
+        spike(4310)             // spike right after pit edge
+        pit(4500, 4620)         // second pit, wider
+        pad(4630)               // jump pad to clear next section
+        pit(4850, 4930)         // tight pit
 
-        // ── Section 5: Block maze + ceiling spikes ───────────────── x 4500–5500
-        block(4500, gY - 60,  60,  60, 1)
-        spike(4610); spike(4642)
-        block(4750, gY - 90,  60,  90, 2)
-        cSpike(4770, 15)
-        spike(4860); spike(4892); spike(4924)
-        block(5000, gY - 60,  60,  60, 1)
-        spike(5110)
-        plat(5250, gY - 110, 120)
-        cSpike(5280, 25)
-        spike(5400); spike(5432)
+        // ── Section 5: Block maze + ceiling spikes ───────────────── x 5100–6100
+        block(5100, gY - 60,  60,  60, 1)
+        spike(5210); spike(5242)
+        block(5350, gY - 90,  60,  90, 2)
+        cSpike(5370, 15)
+        spike(5460); spike(5492); spike(5524)
+        block(5600, gY - 60,  60,  60, 1)
+        spike(5710)
+        plat(5850, gY - 110, 120)
+        cSpike(5880, 25)
+        spike(6000); spike(6032)
 
-        // ── Section 6: Final gauntlet ────────────────────────────── x 5700–6400
+        // ── Section 6: Final gauntlet ────────────────────────────── x 6300–7000
         for i in 0..<6 {
-            let bx = 5700 + CGFloat(i) * 130
+            let bx = 6300 + CGFloat(i) * 130
             spike(bx, i % 3)
             if i % 2 == 0 { spike(bx + 32, (i+1) % 3) }
         }
-        pit(6300, 6400)
-        spike(6430); spike(6462); spike(6494)
-        pad(6380)
+        pit(6900, 7000)
+        spike(7030); spike(7062); spike(7094)
+        pad(6980)
     }
 
     // MARK: Input
