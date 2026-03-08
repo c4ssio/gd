@@ -14,7 +14,7 @@ fileprivate let groundH:    CGFloat = 50
 enum GDState  { case menu, playing, dead, victory }
 enum GameMode { case cube, ship }
 
-enum ObstacleKind { case spike, block, platform, ceilSpike, jumpPad, portal }
+enum ObstacleKind { case spike, block, platform, ceilSpike, jumpPad, portal, speedUp, slowDown }
 
 struct GDObstacle {
     var rect: CGRect
@@ -58,6 +58,7 @@ class GDEngine: ObservableObject {
 
     // World
     @Published var scrollX: CGFloat = 0
+    var currentScrollSpd: CGFloat = scrollSpd   // modified by speed zones
     var progress: CGFloat = 0
 
     // Obstacles & particles
@@ -80,6 +81,7 @@ class GDEngine: ObservableObject {
     var lastDate: Date = Date()
     var accumulator: Double = 0
     var portalCooldown: Int = 0
+    var speedCooldown:  Int = 0
 
     // Set once from size
     var groundY: CGFloat = 400
@@ -291,6 +293,7 @@ class GDEngine: ObservableObject {
 
             // Portal cooldown
             if portalCooldown > 0 { portalCooldown -= 1 }
+            if speedCooldown  > 0 { speedCooldown  -= 1 }
 
             // Screen shake decay
             if shakeTimer > 0 {
@@ -311,7 +314,7 @@ class GDEngine: ObservableObject {
                 velY += gravity
             }
             playerY += velY
-            scrollX += scrollSpd
+            scrollX += currentScrollSpd
             cubeAngle = scrollX * 0.09
             progress = min(1, scrollX / levelLen)
 
@@ -358,6 +361,26 @@ class GDEngine: ObservableObject {
                             mode = .cube
                         }
                         portalCooldown = 20
+                    }
+                    continue
+
+                case .speedUp:
+                    if speedCooldown <= 0 {
+                        currentScrollSpd = scrollSpd * 2
+                        speedCooldown = 20
+                        spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH/2),
+                                       count: 8, speed: 3...7, life: 0.4,
+                                       colors: [.yellow, .orange, .white])
+                    }
+                    continue
+
+                case .slowDown:
+                    if speedCooldown <= 0 {
+                        currentScrollSpd = scrollSpd * 0.5
+                        speedCooldown = 20
+                        spawnParticles(at: CGPoint(x: playerX + playerW/2, y: playerY + playerH/2),
+                                       count: 8, speed: 1...3, life: 0.4,
+                                       colors: [.cyan, Color(red: 0.5, green: 0, blue: 1), .white])
                     }
                     continue
 
@@ -432,6 +455,8 @@ class GDEngine: ObservableObject {
         mode = .cube
         holding = false
         portalCooldown = 0
+        speedCooldown = 0
+        currentScrollSpd = scrollSpd
         particles = []
         deathFlash = 0
         shakeTimer = 0
@@ -537,6 +562,12 @@ class GDEngine: ObservableObject {
         case .portal:
             obs = GDObstacle(rect: CGRect(x: snappedX, y: 20, width: 24, height: gY - 20),
                              kind: .portal, colorIdx: 0)
+        case .speedUp:
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: 0, width: 30, height: gY),
+                             kind: .speedUp, colorIdx: 0)
+        case .slowDown:
+            obs = GDObstacle(rect: CGRect(x: snappedX, y: 0, width: 30, height: gY),
+                             kind: .slowDown, colorIdx: 0)
         }
         customObstacles.append(obs)
     }
@@ -637,35 +668,35 @@ struct EditorView: View {
         (.ceilSpike,"▼ C.Spike"),
         (.jumpPad,  "⬆ Pad"),
         (.portal,   "⬡ Portal"),
+        (.speedUp,  "⚡ 2× Speed"),
+        (.slowDown, "🐢 ½ Speed"),
     ]
 
     var body: some View {
         VStack(spacing: 0) {
-            // ── Top toolbar: obstacle type picker ──
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    // Erase toggle
-                    Button(engine.editorEraseMode ? "✕ Erase ON" : "✕ Erase") {
-                        engine.editorEraseMode.toggle()
-                    }
-                    .buttonStyle(GDButtonStyle(color: engine.editorEraseMode
-                        ? Color(red: 0.9, green: 0.1, blue: 0.1)
-                        : Color(red: 0.3, green: 0.1, blue: 0.4)))
-
-                    ForEach(kindOptions, id: \.1) { (kind, label) in
-                        Button(label) {
-                            engine.selectedKind = kind
-                            engine.editorEraseMode = false
-                        }
-                        .buttonStyle(GDButtonStyle(
-                            color: engine.selectedKind == kind && !engine.editorEraseMode
-                                ? Color(red: 0, green: 0.6, blue: 1)
-                                : Color(red: 0.15, green: 0.15, blue: 0.3)))
-                    }
+            // ── Top toolbar: wrapping grid so all buttons visible in any orientation ──
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 80, maximum: 130))], spacing: 6) {
+                // Erase toggle
+                Button(engine.editorEraseMode ? "✕ Erase ON" : "✕ Erase") {
+                    engine.editorEraseMode.toggle()
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .buttonStyle(GDButtonStyle(color: engine.editorEraseMode
+                    ? Color(red: 0.9, green: 0.1, blue: 0.1)
+                    : Color(red: 0.3, green: 0.1, blue: 0.4)))
+
+                ForEach(kindOptions, id: \.1) { (kind, label) in
+                    Button(label) {
+                        engine.selectedKind = kind
+                        engine.editorEraseMode = false
+                    }
+                    .buttonStyle(GDButtonStyle(
+                        color: engine.selectedKind == kind && !engine.editorEraseMode
+                            ? Color(red: 0, green: 0.6, blue: 1)
+                            : Color(red: 0.15, green: 0.15, blue: 0.3)))
+                }
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .background(Color(red: 0.05, green: 0.05, blue: 0.18))
 
             // ── Editor canvas ──
@@ -1186,8 +1217,10 @@ fileprivate func drawHUD(ctx: GraphicsContext, size: CGSize, engine: GDEngine) {
         .foregroundColor(.white.opacity(0.7))
     ctx.draw(attText, at: CGPoint(x: 20, y: 32), anchor: .topLeading)
 
-    // Mode indicator
-    let modeLabel = engine.mode == .ship ? "✈ SHIP" : "▣ CUBE"
+    // Mode + speed indicator
+    let speedRatio = engine.currentScrollSpd / scrollSpd
+    let speedTag = speedRatio > 1.1 ? " ⚡2×" : speedRatio < 0.9 ? " 🐢½×" : ""
+    let modeLabel = (engine.mode == .ship ? "✈ SHIP" : "▣ CUBE") + speedTag
     let modeColor: Color = engine.mode == .ship ?
         Color(red: 0.2, green: 0.8, blue: 1) : Color(red: 0.1, green: 1, blue: 0.5)
     let modeText = Text(modeLabel)
@@ -1379,5 +1412,23 @@ fileprivate func drawObstacleShape(ctx: GraphicsContext, obs: GDObstacle, sr: CG
             c.opacity = 0.2
             c.fill(Path(sr), with: .color(Color(red: 0.7, green: 0.1, blue: 1)))
         }
+    case .speedUp:
+        let speedCol = Color(red: 1, green: 0.7, blue: 0)
+        ctx.stroke(Path(sr), with: .color(speedCol), lineWidth: 2.5)
+        ctx.drawLayer { c in
+            c.opacity = 0.25
+            c.fill(Path(sr), with: .color(speedCol))
+        }
+        let lbl = Text("2×").font(.system(size: 11, weight: .bold)).foregroundColor(speedCol)
+        ctx.draw(lbl, at: CGPoint(x: sr.midX, y: sr.midY), anchor: .center)
+    case .slowDown:
+        let slowCol = Color(red: 0.3, green: 0.6, blue: 1)
+        ctx.stroke(Path(sr), with: .color(slowCol), lineWidth: 2.5)
+        ctx.drawLayer { c in
+            c.opacity = 0.25
+            c.fill(Path(sr), with: .color(slowCol))
+        }
+        let lbl2 = Text("½").font(.system(size: 11, weight: .bold)).foregroundColor(slowCol)
+        ctx.draw(lbl2, at: CGPoint(x: sr.midX, y: sr.midY), anchor: .center)
     }
 }
