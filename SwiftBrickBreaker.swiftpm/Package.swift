@@ -16,6 +16,8 @@ let package = Package(
         .iOSApplication(
             name: "SwiftBrickBreaker",
             targets: ["AppModule"],
+            bundleIdentifier: "PaesLemeBrickBreaker",
+            teamIdentifier: "J8D7WJR5PY",
             displayVersion: "1.0",
             bundleVersion: "1",
             appIcon: .placeholder(icon: .star),
