@@ -3,56 +3,77 @@ import Combine
 
 // MARK: - Data Models
 // These structs mirror the SQLite schema in market_data.db.
-// Phase 2: replace seed arrays below with GRDB queries.
+// Phase 2: replace seed arrays below with GRDB queries against the bundled DB.
+//
+// Schema recap:
+//   assets(ticker, name, short_name, category, parent, level,
+//          display_group, color_hex, sort_order, description)
+//   prices(ticker, ts TEXT, open, high, low, close, volume)
+//          ts format: "YYYY-MM-DDTHH:MM:SS" Eastern — 7 bars/trading day
+//   views: hourly_returns, weekly_returns
+//
+// Primary game-loop query (Phase 2):
+//   SELECT ticker, hourly_return FROM hourly_returns WHERE ts = ?
+//   → apply return to each ticker's current allocation
 
 struct AssetInfo: Identifiable, Equatable {
     let id: String        // ticker — PRIMARY KEY in assets table
     let name: String
-    let category: String  // matches assets.category column
-    let parent: String?   // matches assets.parent column; nil = top-level
+    let shortName: String // matches assets.short_name — tight heatmap label
+    let category: String  // matches assets.category
+    let parent: String?   // matches assets.parent; nil = top-level
     let level: Int        // 1 = asset class, 2 = sector
+    let displayGroup: String  // matches assets.display_group — heatmap bucket
+    let colorHex: String      // matches assets.color_hex — base heatmap color
     let emoji: String
 
     var ticker: String { id }
 }
 
-// Mirrors a row from the prices table (used by data pipeline, referenced in comments)
-// struct PriceBar { ticker: String, date: String, open/high/low/close: Double, volume: Int }
-
 // MARK: - Seed Data
-// TODO Phase 2: replace with `SELECT * FROM assets WHERE level = 1`
+// TODO Phase 2: replace with GRDB query:
+//   try db.read { SELECT * FROM assets WHERE level = 1 ORDER BY sort_order }
+//   Map rows to AssetInfo using assets.short_name, display_group, color_hex
 fileprivate let topAssets: [AssetInfo] = [
-    .init(id: "US_EQ", name: "US Equities",      category: "equity",      parent: nil, level: 1, emoji: "🏛"),
-    .init(id: "TLT",   name: "Long Treasuries",   category: "bond",        parent: nil, level: 1, emoji: "📜"),
-    .init(id: "SHV",   name: "Short T-Bills",     category: "bond",        parent: nil, level: 1, emoji: "💵"),
-    .init(id: "GLD",   name: "Gold",              category: "commodity",   parent: nil, level: 1, emoji: "🥇"),
-    .init(id: "DJP",   name: "Commodities",       category: "commodity",   parent: nil, level: 1, emoji: "⚡️"),
-    .init(id: "UUP",   name: "USD Index",         category: "forex",       parent: nil, level: 1, emoji: "💱"),
-    .init(id: "EFA",   name: "Intl Developed",    category: "equity",      parent: nil, level: 1, emoji: "🌍"),
-    .init(id: "EEM",   name: "Emerging Markets",  category: "equity",      parent: nil, level: 1, emoji: "🌏"),
-    .init(id: "VNQ",   name: "Real Estate",       category: "realestate",  parent: nil, level: 1, emoji: "🏢"),
-    .init(id: "SGOV",  name: "Cash",              category: "cash",        parent: nil, level: 1, emoji: "💰"),
+    .init(id: "US_EQ", name: "US Equities",      shortName: "US Eq.",   category: "equity",     parent: nil, level: 1, displayGroup: "US Equities",   colorHex: "#E8943A", emoji: "🏛"),
+    .init(id: "TLT",   name: "Long Treasuries",   shortName: "Bonds LT", category: "bond",       parent: nil, level: 1, displayGroup: "Fixed Income",  colorHex: "#4A90D9", emoji: "📜"),
+    .init(id: "SHV",   name: "Short T-Bills",     shortName: "T-Bills",  category: "bond",       parent: nil, level: 1, displayGroup: "Fixed Income",  colorHex: "#5BA3E8", emoji: "💵"),
+    .init(id: "GLD",   name: "Gold",              shortName: "Gold",     category: "commodity",  parent: nil, level: 1, displayGroup: "Commodities",   colorHex: "#C4922A", emoji: "🥇"),
+    .init(id: "DJP",   name: "Commodities",       shortName: "Commod.",  category: "commodity",  parent: nil, level: 1, displayGroup: "Commodities",   colorHex: "#A87830", emoji: "⚡️"),
+    .init(id: "UUP",   name: "USD Index",         shortName: "USD",      category: "forex",      parent: nil, level: 1, displayGroup: "Forex",         colorHex: "#9B6FD4", emoji: "💱"),
+    .init(id: "EFA",   name: "Intl Developed",    shortName: "Intl Dev", category: "equity",     parent: nil, level: 1, displayGroup: "International", colorHex: "#34A87A", emoji: "🌍"),
+    .init(id: "EEM",   name: "Emerging Markets",  shortName: "EM",       category: "equity",     parent: nil, level: 1, displayGroup: "International", colorHex: "#2D9162", emoji: "🌏"),
+    .init(id: "VNQ",   name: "Real Estate",       shortName: "REITs",    category: "realestate", parent: nil, level: 1, displayGroup: "Alternatives",  colorHex: "#D4813A", emoji: "🏢"),
+    .init(id: "SGOV",  name: "Cash",              shortName: "Cash",     category: "cash",       parent: nil, level: 1, displayGroup: "Cash",          colorHex: "#9CA3AF", emoji: "💰"),
 ]
 
-// TODO Phase 2: replace with `SELECT * FROM assets WHERE level = 2`
+// TODO Phase 2: replace with GRDB query:
+//   try db.read { SELECT * FROM assets WHERE level = 2 ORDER BY sort_order }
 fileprivate let sectorAssets: [AssetInfo] = [
-    .init(id: "XLK",  name: "Technology",         category: "equity_sector", parent: "US_EQ", level: 2, emoji: "💻"),
-    .init(id: "XLV",  name: "Healthcare",          category: "equity_sector", parent: "US_EQ", level: 2, emoji: "🏥"),
-    .init(id: "XLF",  name: "Financials",          category: "equity_sector", parent: "US_EQ", level: 2, emoji: "🏦"),
-    .init(id: "XLY",  name: "Cons. Disc.",         category: "equity_sector", parent: "US_EQ", level: 2, emoji: "🛍"),
-    .init(id: "XLP",  name: "Cons. Staples",       category: "equity_sector", parent: "US_EQ", level: 2, emoji: "🛒"),
-    .init(id: "XLI",  name: "Industrials",         category: "equity_sector", parent: "US_EQ", level: 2, emoji: "⚙️"),
-    .init(id: "XLE",  name: "Energy",              category: "equity_sector", parent: "US_EQ", level: 2, emoji: "🛢"),
-    .init(id: "XLU",  name: "Utilities",           category: "equity_sector", parent: "US_EQ", level: 2, emoji: "💡"),
-    .init(id: "XLB",  name: "Materials",           category: "equity_sector", parent: "US_EQ", level: 2, emoji: "⛏"),
-    .init(id: "XLRE", name: "Sector RE",           category: "equity_sector", parent: "US_EQ", level: 2, emoji: "🏘"),
-    .init(id: "XLC",  name: "Comm. Services",      category: "equity_sector", parent: "US_EQ", level: 2, emoji: "📡"),
+    .init(id: "XLK",  name: "Technology",         shortName: "Tech",    category: "equity_sector", parent: "US_EQ", level: 2, displayGroup: "US Equities", colorHex: "#F59E0B", emoji: "💻"),
+    .init(id: "XLV",  name: "Healthcare",          shortName: "Health",  category: "equity_sector", parent: "US_EQ", level: 2, displayGroup: "US Equities", colorHex: "#EC4899", emoji: "🏥"),
+    .init(id: "XLF",  name: "Financials",          shortName: "Fin.",    category: "equity_sector", parent: "US_EQ", level: 2, displayGroup: "US Equities", colorHex: "#3B82F6", emoji: "🏦"),
+    .init(id: "XLY",  name: "Cons. Disc.",         shortName: "Disc.",   category: "equity_sector", parent: "US_EQ", level: 2, displayGroup: "US Equities", colorHex: "#8B5CF6", emoji: "🛍"),
+    .init(id: "XLP",  name: "Cons. Staples",       shortName: "Staples", category: "equity_sector", parent: "US_EQ", level: 2, displayGroup: "US Equities", colorHex: "#6EE7B7", emoji: "🛒"),
+    .init(id: "XLI",  name: "Industrials",         shortName: "Indust.", category: "equity_sector", parent: "US_EQ", level: 2, displayGroup: "US Equities", colorHex: "#F97316", emoji: "⚙️"),
+    .init(id: "XLE",  name: "Energy",              shortName: "Energy",  category: "equity_sector", parent: "US_EQ", level: 2, displayGroup: "US Equities", colorHex: "#78350F", emoji: "🛢"),
+    .init(id: "XLU",  name: "Utilities",           shortName: "Utils.",  category: "equity_sector", parent: "US_EQ", level: 2, displayGroup: "US Equities", colorHex: "#A78BFA", emoji: "💡"),
+    .init(id: "XLB",  name: "Materials",           shortName: "Matls.",  category: "equity_sector", parent: "US_EQ", level: 2, displayGroup: "US Equities", colorHex: "#84CC16", emoji: "⛏"),
+    .init(id: "XLRE", name: "Sector RE",           shortName: "Sec. RE", category: "equity_sector", parent: "US_EQ", level: 2, displayGroup: "US Equities", colorHex: "#FB923C", emoji: "🏘"),
+    .init(id: "XLC",  name: "Comm. Services",      shortName: "Comm.",   category: "equity_sector", parent: "US_EQ", level: 2, displayGroup: "US Equities", colorHex: "#38BDF8", emoji: "📡"),
 ]
 
 // MARK: - Mock Market Returns
-// TODO Phase 2: replace with:
-//   SELECT close FROM prices WHERE ticker = ? ORDER BY date
-//   weekly_return[i] = close[i] / close[i-1] - 1
+// Placeholder until GRDB is wired up.
+// TODO Phase 2: replace entire mockReturn() with an hourly_returns query:
+//   let rows = try db.read { db in
+//       try Row.fetchAll(db, sql: """
+//           SELECT ticker, hourly_return
+//           FROM hourly_returns
+//           WHERE ts = ?
+//       """, arguments: [currentTimestamp])
+//   }
+//   // currentTimestamp advances one row per game tick (fast-forward = skip N rows)
 fileprivate func mockReturn(ticker: String, week: Int) -> Double {
     let h = ticker.unicodeScalars.reduce(0) { $0 ^ Int($1.value) }
     let a = sin(Double(h) * 0.137 + Double(week) * 0.41)
