@@ -5,7 +5,7 @@ fileprivate let playerW:    CGFloat = 30
 fileprivate let playerH:    CGFloat = 30
 fileprivate let gravity:    CGFloat = 0.65
 fileprivate let jumpVel:    CGFloat = -13.5
-fileprivate let scrollSpd:  CGFloat = 5
+fileprivate let scrollSpd:  CGFloat = 2
 fileprivate let levelLen:   CGFloat = 7700
 fileprivate let groundH:    CGFloat = 50
 
@@ -49,7 +49,7 @@ class GDEngine: ObservableObject {
 
     // Player
     var playerX:   CGFloat = 120
-    var playerY:   CGFloat = 0
+    @Published var playerY: CGFloat = 0
     var velY:      CGFloat = 0
     var onGround:  Bool = false
     var cubeAngle: CGFloat = 0      // degrees, updated while scrolling
@@ -57,7 +57,7 @@ class GDEngine: ObservableObject {
     var holding:   Bool = false     // tap held (ship thrust)
 
     // World
-    var scrollX: CGFloat = 0
+    @Published var scrollX: CGFloat = 0
     var progress: CGFloat = 0
 
     // Obstacles & particles
