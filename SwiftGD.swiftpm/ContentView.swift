@@ -555,15 +555,6 @@ struct GameView: View {
                         engine.tick(size: geo.size)
                     }
                 }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { _ in
-                            engine.touchDown()
-                            engine.tap()
-                        }
-                        .onEnded { _ in engine.touchUp() }
-                )
 
                 // "Edit Level" on menu, "Return to Editor" on dead/victory
                 if engine.state == .menu {
@@ -577,6 +568,15 @@ struct GameView: View {
                         .padding(.bottom, 20)
                 }
             }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        engine.touchDown()
+                        engine.tap()
+                    }
+                    .onEnded { _ in engine.touchUp() }
+            )
         }
         .background(Color.black)
         .ignoresSafeArea()
