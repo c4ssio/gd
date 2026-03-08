@@ -11,7 +11,7 @@ let playerH:  Double = 30
 let gravity:  Double = 0.65
 let jumpVel:  Double = -13.5
 let scrollSpd: Double = 5
-let levelLen:  Double = 7700
+let levelLen:  Double = 9300
 let groundH:   Double = 50
 
 // Screen size — default is iPhone 15 landscape
@@ -70,50 +70,40 @@ func buildLevel() -> (obstacles: [Obs], gaps: [(Double, Double)]) {
         obs.append(Obs(x: x, y: y, w: w, h: h, kind: .block))
     }
 
-    // ── Section 1 ──────────────────────────────────────── x 800–1600
-    spike(800); spike(1050); spike(1300); spike(1550)
+    // ── Section 1 ──────────────────────────────────────── x 900–1900
+    spike(900); spike(1400); spike(1900)
 
-    // ── Section 2 ──────────────────────────────────────── x 1850–2700
-    spike(1850); spike(2050); spike(2250); spike(2450)
-    pad(2650)
+    // ── Section 2 ──────────────────────────────────────── x 2400–3500
+    spike(2400); spike(2830); spike(3260); pad(3580)
 
-    // ── Section 3 ──────────────────────────────────────── x 2900–3600
-    plat(2900, gY-80, 150); cSpike(2970, 30)
-    spike(3110)
-    plat(3200, gY-130, 120); cSpike(3240, 20)
-    plat(3420, gY-80, 120)
-    spike(3580)
+    // ── Section 3 ──────────────────────────────────────── x 3800–4600
+    plat(3800, gY-80, 150); cSpike(3870, 30)
+    plat(4100, gY-130, 120); cSpike(4140, 20)
+    plat(4350, gY-80, 120)
+    spike(4580)
 
-    // ── Ship section ───────────────────────────────────── x 3800–4000
-    portal(3800)
+    // ── Ship section ───────────────────────────────────── x 4780–4980
+    portal(4780)
     let tunnelY = gY - 110
-    let gapH: Double = 80
-    twall(3840, 0, 180, tunnelY)
-    twall(3940, 0, 180, tunnelY-20)
-    portal(3990)
+    twall(4820, 0, 180, tunnelY)
+    twall(4920, 0, 180, tunnelY-20)
+    portal(4970)
 
-    // ── Section 4 ──────────────────────────────────────── x 4200–5100
-    pit(4250, 4370)
-    spike(4510)
-    pit(4660, 4780)
-    pit(4980, 5060)
+    // ── Section 4 ──────────────────────────────────────── x 5150–6320
+    pit(5150, 5310)
+    spike(5760)
+    pit(6160, 6320)
 
-    // ── Section 5 ──────────────────────────────────────── x 5200–6400
-    spike(5200)
-    cSpike(5380, 15)
-    spike(5460)
-    spike(5660)
-    cSpike(5720, 15)
-    spike(5850)
-    spike(6050)
-    plat(6200, gY-90, 140); cSpike(6230, 20)
-    spike(6370)
+    // ── Section 5 ──────────────────────────────────────── x 6620–7480
+    spike(6620)
+    cSpike(6900, 15)
+    spike(7050)
+    plat(7300, gY-90, 140); cSpike(7330, 20)
+    spike(7480)
 
-    // ── Section 6 ──────────────────────────────────────── x 6550–7400
-    spike(6550, 0); spike(6750, 1)
-    spike(6950, 2); spike(7150, 0)
-    pit(7400, 7520)
-    spike(7600)
+    // ── Section 6 ──────────────────────────────────────── x 7830–8780
+    spike(7830, 0); spike(8250, 1); spike(8620, 2)
+    pit(8950, 9070)
 
     return (obs, gaps)
 }
@@ -286,10 +276,34 @@ for e in events {
 }
 print("")
 
+// Difficulty score: rest frames between consecutive jumps
+// restFrames = gap between jump frames - 41 (air time). Negative = impossible.
+let jumpEvents = events.filter { $0.msg.hasPrefix("JUMP") }
+var restTimes: [Int] = []
+for i in 1..<jumpEvents.count {
+    let gap = jumpEvents[i].frame - jumpEvents[i-1].frame
+    restTimes.append(gap - 41)
+}
+
+print("── Difficulty Analysis ──────────────────────────────")
+for i in 0..<restTimes.count {
+    let rest = restTimes[i]
+    let rating = rest < 0 ? "💀 IMPOSSIBLE" : rest < 20 ? "🔴 brutal" : rest < 35 ? "🟠 hard" : rest < 55 ? "🟡 medium" : "🟢 easy"
+    let worldX = Int(jumpEvents[i+1].scrollX + 120)
+    print("  jump→jump \(String(format: "%+4d", rest)) rest frames  \(rating)  (worldX≈\(worldX))")
+}
+if !restTimes.isEmpty {
+    let minRest = restTimes.min()!
+    let avgRest = restTimes.reduce(0, +) / restTimes.count
+    print("")
+    print("  min rest: \(minRest) frames  avg rest: \(avgRest) frames")
+}
+print("")
+
 if completed {
     print("✅  LEVEL COMPLETABLE")
     print("    Finished in \(frames) frames (\(String(format: "%.1f", Double(frames)/60))s at 60fps)")
-    print("    \(events.filter { $0.msg.hasPrefix("JUMP") }.count) jumps required")
+    print("    \(jumpEvents.count) jumps required")
 } else {
     print("❌  LEVEL NOT COMPLETABLE")
     print("    \(deathMsg ?? "unknown")")

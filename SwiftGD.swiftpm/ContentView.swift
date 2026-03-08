@@ -6,7 +6,7 @@ fileprivate let playerH:    CGFloat = 30
 fileprivate let gravity:    CGFloat = 0.65
 fileprivate let jumpVel:    CGFloat = -13.5
 fileprivate let scrollSpd:  CGFloat = 5
-fileprivate let levelLen:   CGFloat = 7700
+fileprivate let levelLen:   CGFloat = 9300
 fileprivate let groundH:    CGFloat = 50
 
 // MARK: - Types
@@ -164,53 +164,48 @@ class GDEngine: ObservableObject {
                 kind: .block, colorIdx: 2))
         }
 
-        // ── Section 1: Tutorial — gentle single spikes ──────────── x 800–1600
-        spike(800); spike(1050); spike(1300); spike(1550)
+        // ── Section 1: Tutorial — 3 easy spikes, ~500px apart ──────── x 900–1900
+        // Rest between jumps: ~59 frames (comfortable)
+        spike(900); spike(1400); spike(1900)
 
-        // ── Section 2: Rhythm — rapid single spikes + jump pad ─── x 1850–2700
-        spike(1850); spike(2050); spike(2250); spike(2450)
-        pad(2650)
+        // ── Section 2: Rhythm — 3 spikes + jump pad, ~430px apart ─── x 2400–3500
+        // Rest between jumps: ~45 frames (moderate)
+        spike(2400); spike(2830); spike(3260); pad(3580)
 
-        // ── Section 3: Platforms + ceiling threat ───────────────── x 2900–3600
-        plat(2900, gY - 80,  150)
-        cSpike(2970, 30)
-        spike(3110)
-        plat(3200, gY - 130, 120)
-        cSpike(3240, 20)
-        plat(3420, gY - 80,  120)
-        spike(3580)
+        // ── Section 3: Platforms + ceiling threat ───────────────────── x 3800–4600
+        plat(3800, gY - 80,  150)
+        cSpike(3870, 30)
+        plat(4100, gY - 130, 120)
+        cSpike(4140, 20)
+        plat(4350, gY - 80,  120)
+        spike(4580)
 
-        // ── Ship section: portal → narrow tunnel → return portal ─── x 3800–4000
-        portal(3800)  // cube → ship
-        let tunnelY  = gY - 110   // ceiling of tunnel
-        let gapH: CGFloat = 80    // fly-through gap
-        twall(3840, 0, 180, tunnelY)        // ceiling wall
-        twall(3940, 0, 180, tunnelY - 20)  // narrower 2nd ceiling
-        portal(3990)  // ship → cube
+        // ── Ship section: portal → narrow tunnel → return portal ──── x 4780–4980
+        portal(4780)
+        let tunnelY = gY - 110
+        twall(4820, 0, 180, tunnelY)
+        twall(4920, 0, 180, tunnelY - 20)
+        portal(4970)
 
-        // ── Section 4: Death pits ────────────────────────────────── x 4200–5100
-        pit(4250, 4370)
-        spike(4510)                // spike with room: 140px after pit end
-        pit(4660, 4780)            // pit 2 starting 150px after spike
-        pit(4980, 5060)            // pit 3
+        // ── Section 4: Death pits — 2 pits + 1 spike, ~450px apart ── x 5150–6320
+        // Rest between jumps: ~47 frames (comfortable)
+        pit(5150, 5310)
+        spike(5760)          // 450px after pit end
+        pit(6160, 6320)      // 400px after spike
 
-        // ── Section 5: Ceiling threats + spikes ─────────────────── x 5200–6400
-        spike(5200)
-        cSpike(5380, 15)
-        spike(5460)
-        spike(5660)
-        cSpike(5720, 15)
-        spike(5850)
-        spike(6050)
-        plat(6200, gY - 90, 140)
-        cSpike(6230, 20)
-        spike(6370)
+        // ── Section 5: Mixed threats, ~430px apart ───────────────── x 6620–7500
+        // Rest between jumps: ~45 frames (moderate)
+        spike(6620)
+        cSpike(6900, 15)
+        spike(7050)          // 430px after spike(6620)
+        plat(7300, gY - 90, 140)
+        cSpike(7330, 20)
+        spike(7480)          // 430px after spike(7050)
 
-        // ── Section 6: Final gauntlet (rapid spikes + pits) ──────── x 6550–7400
-        spike(6550, 0); spike(6750, 1)
-        spike(6950, 2); spike(7150, 0)
-        pit(7400, 7520)
-        spike(7600)
+        // ── Section 6: Final gauntlet — spikes + pit, ~400px apart ── x 7830–9070
+        // Rest between jumps: ~30–43 frames (challenging but fair)
+        spike(7830, 0); spike(8250, 1); spike(8620, 2)
+        pit(8950, 9070)
     }
 
     // MARK: Input
