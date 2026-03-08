@@ -6,7 +6,7 @@ fileprivate let playerH:    CGFloat = 30
 fileprivate let gravity:    CGFloat = 0.65
 fileprivate let jumpVel:    CGFloat = -13.5
 fileprivate let scrollSpd:  CGFloat = 5
-fileprivate let levelLen:   CGFloat = 7200
+fileprivate let levelLen:   CGFloat = 7700
 fileprivate let groundH:    CGFloat = 50
 
 // MARK: - Types
@@ -78,6 +78,7 @@ class GDEngine: ObservableObject {
     var deathPause: CGFloat = 0
     var victoryTimer: CGFloat = 0
     var lastDate: Date = Date()
+    var portalCooldown: Int = 0
 
     // Set once from size
     var groundY: CGFloat = 400
@@ -162,64 +163,53 @@ class GDEngine: ObservableObject {
                 kind: .block, colorIdx: 2))
         }
 
-        // ── Section 1: Tutorial — gentle single spikes ──────────── x 800–1550
-        spike(800); spike(980); spike(1160); spike(1340); spike(1520)
+        // ── Section 1: Tutorial — gentle single spikes ──────────── x 800–1600
+        spike(800); spike(1050); spike(1300); spike(1550)
 
-        // ── Section 2: Double spikes + a jump pad ───────────────── x 1800–2600
-        for i in 0..<4 {
-            let bx = 1800 + CGFloat(i) * 200
-            spike(bx); spike(bx + 32)
-        }
-        pad(2500)   // teach the jump pad mechanic
+        // ── Section 2: Rhythm — rapid single spikes + jump pad ─── x 1850–2700
+        spike(1850); spike(2050); spike(2250); spike(2450)
+        pad(2650)
 
-        // ── Section 3: Platforms + ceiling threat ───────────────── x 2800–3600
-        plat(2800, gY - 80,  150)
-        cSpike(2870, 30)
-        spike(3010)
-        plat(3100, gY - 130, 120)
-        cSpike(3140, 20)
-        plat(3320, gY - 80,  120)
-        spike(3480); spike(3512)
+        // ── Section 3: Platforms + ceiling threat ───────────────── x 2900–3600
+        plat(2900, gY - 80,  150)
+        cSpike(2970, 30)
+        spike(3110)
+        plat(3200, gY - 130, 120)
+        cSpike(3240, 20)
+        plat(3420, gY - 80,  120)
+        spike(3580)
 
-        // ── Ship section: portal → narrow tunnel → return portal ─── x 3700–3900
-        portal(3700)  // cube → ship
-        // Tunnel: ceiling blocks force player to fly at mid-height
+        // ── Ship section: portal → narrow tunnel → return portal ─── x 3800–4000
+        portal(3800)  // cube → ship
         let tunnelY  = gY - 110   // ceiling of tunnel
         let gapH: CGFloat = 80    // fly-through gap
-        twall(3740, 0,       180, tunnelY)            // upper wall (ceiling)
-        twall(3740, tunnelY + gapH, 180, gY - (tunnelY + gapH))  // lower wall (floor plug)
-        twall(3840, 0,       180, tunnelY - 20)       // narrower 2nd tunnel ceiling
-        twall(3840, tunnelY + gapH - 20, 180, 60)    // lower wall
-        portal(3890)  // ship → cube
+        twall(3840, 0, 180, tunnelY)        // ceiling wall
+        twall(3940, 0, 180, tunnelY - 20)  // narrower 2nd ceiling
+        portal(3990)  // ship → cube
 
-        // ── Section 4: Death pits ────────────────────────────────── x 4100–4900
-        pit(4150, 4270)         // first pit
-        spike(4310)             // spike right after pit edge
-        pit(4500, 4620)         // second pit, wider
-        pad(4630)               // jump pad to clear next section
-        pit(4850, 4930)         // tight pit
+        // ── Section 4: Death pits ────────────────────────────────── x 4200–5100
+        pit(4250, 4370)
+        spike(4510)                // spike with room: 140px after pit end
+        pit(4660, 4780)            // pit 2 starting 150px after spike
+        pit(4980, 5060)            // pit 3
 
-        // ── Section 5: Block maze + ceiling spikes ───────────────── x 5100–6100
-        block(5100, gY - 60,  60,  60, 1)
-        spike(5210); spike(5242)
-        block(5350, gY - 90,  60,  90, 2)
-        cSpike(5370, 15)
-        spike(5460); spike(5492); spike(5524)
-        block(5600, gY - 60,  60,  60, 1)
-        spike(5710)
-        plat(5850, gY - 110, 120)
-        cSpike(5880, 25)
-        spike(6000); spike(6032)
+        // ── Section 5: Ceiling threats + spikes ─────────────────── x 5200–6400
+        spike(5200)
+        cSpike(5380, 15)
+        spike(5460)
+        spike(5660)
+        cSpike(5720, 15)
+        spike(5850)
+        spike(6050)
+        plat(6200, gY - 90, 140)
+        cSpike(6230, 20)
+        spike(6370)
 
-        // ── Section 6: Final gauntlet ────────────────────────────── x 6300–7000
-        for i in 0..<6 {
-            let bx = 6300 + CGFloat(i) * 130
-            spike(bx, i % 3)
-            if i % 2 == 0 { spike(bx + 32, (i+1) % 3) }
-        }
-        pit(6900, 7000)
-        spike(7030); spike(7062); spike(7094)
-        pad(6980)
+        // ── Section 6: Final gauntlet (rapid spikes + pits) ──────── x 6550–7400
+        spike(6550, 0); spike(6750, 1)
+        spike(6950, 2); spike(7150, 0)
+        pit(7400, 7520)
+        spike(7600)
     }
 
     // MARK: Input
@@ -277,6 +267,9 @@ class GDEngine: ObservableObject {
         case .playing: break
         }
 
+        // Portal cooldown
+        if portalCooldown > 0 { portalCooldown -= 1 }
+
         // Screen shake decay
         if shakeTimer > 0 {
             shakeTimer -= dt
@@ -292,7 +285,7 @@ class GDEngine: ObservableObject {
             // Ship: hold = thrust up, release = fall
             let thrust: CGFloat = holding ? -1.1 : 0.0
             velY += gravity * 0.55 + thrust
-            velY = max(-9, min(9, velY))  // clamp ship speed
+            velY = max(-4, min(9, velY))  // clamp ship speed (cap up at -4 to prevent ceiling overshoot)
         } else {
             velY += gravity
         }
@@ -336,14 +329,17 @@ class GDEngine: ObservableObject {
                 die(size: size); return
 
             case .portal:
-                // Switch modes
-                if mode == .cube {
-                    mode = .ship
-                    velY = min(velY, -2)  // slight upward nudge on entry
-                } else {
-                    mode = .cube
+                // Switch modes (guarded by cooldown so we don't toggle every frame)
+                if portalCooldown <= 0 {
+                    if mode == .cube {
+                        mode = .ship
+                        velY = min(velY, -2)
+                    } else {
+                        mode = .cube
+                    }
+                    portalCooldown = 20
                 }
-                continue  // don't die or land, just pass through
+                continue
 
             case .jumpPad:
                 // Bounce — only trigger if coming down onto it
@@ -357,15 +353,23 @@ class GDEngine: ObservableObject {
                                    colors: [.yellow, Color(red:1,green:0.8,blue:0), .white])
                 }
 
-            case .block, .platform:
-                // Land on top if coming down
+            case .platform:
+                // One-way: only land on top, pass through from below/sides
+                let prevBottomPlat = playerY + playerH - velY
+                if prevBottomPlat <= sRect.minY + 4 && velY >= 0 {
+                    playerY = sRect.minY - playerH
+                    velY = 0
+                    onGround = true
+                }
+
+            case .block:
+                // Solid: land on top or die on sides/bottom
                 let prevBottom = playerY + playerH - velY
                 if prevBottom <= sRect.minY + 4 && velY >= 0 {
                     playerY = sRect.minY - playerH
                     velY = 0
                     onGround = true
                 } else {
-                    // Side / bottom collision = death
                     die(size: size); return
                 }
             }
@@ -408,6 +412,7 @@ class GDEngine: ObservableObject {
         onGround = true
         mode = .cube
         holding = false
+        portalCooldown = 0
         particles = []
         deathFlash = 0
         shakeTimer = 0
