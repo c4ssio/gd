@@ -26,6 +26,117 @@ struct AssetGroup: Identifiable {
 }
 
 // ============================================================
+// MARK: - Portfolio
+// ============================================================
+
+struct Holding: Identifiable {
+    let ticker:      String
+    var shares:      Double   // units held (for CASH, 1 share = $1)
+    var avgBuyPrice: Double   // weighted avg cost basis
+    var buyBarIndex: Int      // bar when first purchased
+    var id: String { ticker }
+}
+
+final class Portfolio: ObservableObject {
+    static let startingCash: Double = 10_000
+
+    @Published var holdings: [String: Holding] = [
+        "CASH": Holding(ticker: "CASH", shares: startingCash,
+                        avgBuyPrice: 1.0, buyBarIndex: 0)
+    ]
+    @Published private(set) var totalDividendsReceived: Double = 0
+
+    // MARK: Computed helpers
+
+    func currentValue(ticker: String, prices: [String: Double]) -> Double {
+        guard let h = holdings[ticker] else { return 0 }
+        return h.shares * (prices[ticker] ?? 1.0)
+    }
+
+    func totalValue(prices: [String: Double]) -> Double {
+        holdings.keys.reduce(0) { $0 + currentValue(ticker: $1, prices: prices) }
+    }
+
+    func fraction(ticker: String, prices: [String: Double]) -> Double {
+        let total = totalValue(prices: prices)
+        guard total > 0 else { return 0 }
+        return currentValue(ticker: ticker, prices: prices) / total
+    }
+
+    func returnSinceBuy(ticker: String, prices: [String: Double]) -> Double {
+        guard let h = holdings[ticker],
+              let price = prices[ticker],
+              h.avgBuyPrice > 0 else { return 0 }
+        return price / h.avgBuyPrice - 1.0
+    }
+
+    // MARK: Dividend accrual
+
+    /// Called once per bar. Drips pro-rated annual yield into CASH.
+    func accrueDiv(prices: [String: Double], totalBars: Int) {
+        let perBarFactor = 1.0 / Double(totalBars)
+        var cashGain = 0.0
+        for (ticker, holding) in holdings {
+            guard ticker != "CASH" else { continue }
+            let yield = dividendYields[ticker] ?? 0.0
+            guard yield > 0 else { continue }
+            let price = prices[ticker] ?? 0.0
+            cashGain += holding.shares * price * yield * perBarFactor
+        }
+        if cashGain > 0.001 {
+            holdings["CASH"]?.shares += cashGain
+            totalDividendsReceived += cashGain
+        }
+    }
+
+    /// Dividends paid by a specific ticker since it was first held (approximate).
+    func dividendsPaid(ticker: String, prices: [String: Double], totalBars: Int) -> Double {
+        guard let h = holdings[ticker], ticker != "CASH" else { return 0 }
+        let yield = dividendYields[ticker] ?? 0.0
+        guard yield > 0 else { return 0 }
+        let price = prices[ticker] ?? 0.0
+        // Rough: current shares × current price × yield × fraction of year held
+        let fractionHeld = min(1.0, Double(totalBars - h.buyBarIndex) / Double(totalBars))
+        return h.shares * price * yield * fractionHeld
+    }
+
+    // MARK: Execute trade
+
+    /// Buy `targetDollars` of `targetTicker` funded by `sources` (ticker → dollars).
+    func invest(targetTicker: String, targetDollars: Double,
+                sources: [String: Double], prices: [String: Double],
+                barIndex: Int) {
+        guard targetDollars > 0 else { return }
+
+        // Sell from each source
+        for (ticker, dollars) in sources where dollars > 0.01 {
+            let price = prices[ticker] ?? 1.0
+            guard price > 0 else { continue }
+            holdings[ticker]?.shares -= dollars / price
+            if let h = holdings[ticker], h.shares < 0.001 {
+                holdings.removeValue(forKey: ticker)
+            }
+        }
+
+        // Buy target — weighted-average cost basis if already held
+        let targetPrice = prices[targetTicker] ?? 1.0
+        guard targetPrice > 0 else { return }
+        let newShares = targetDollars / targetPrice
+
+        if var existing = holdings[targetTicker] {
+            let oldCost = existing.shares * existing.avgBuyPrice
+            let newCost = newShares * targetPrice
+            existing.avgBuyPrice = (oldCost + newCost) / (existing.shares + newShares)
+            existing.shares += newShares
+            holdings[targetTicker] = existing
+        } else {
+            holdings[targetTicker] = Holding(ticker: targetTicker, shares: newShares,
+                                             avgBuyPrice: targetPrice, buyBarIndex: barIndex)
+        }
+    }
+}
+
+// ============================================================
 // MARK: - Playback Speed
 // ============================================================
 
@@ -65,6 +176,9 @@ final class GameEngine: ObservableObject {
     let groups: [AssetGroup]
     private var timer: Timer?
 
+    /// Called once per bar advance. Wire up portfolio dividend accrual here.
+    var onTick: (() -> Void)?
+
     init(data: GameData) {
         self.data = data
         // Build ordered groups preserving the JSON asset order
@@ -91,6 +205,42 @@ final class GameEngine: ObservableObject {
 
     func currentPrice(for s: AssetSeries) -> Double {
         s.closes.isEmpty ? 0 : s.closes[min(barIndex, s.closes.count - 1)]
+    }
+
+    func series(for ticker: String) -> AssetSeries? {
+        data.assets.first { $0.ticker == ticker }
+    }
+
+    /// Unique trading days remaining after the current bar (inclusive of today).
+    var tradingDaysRemaining: Int {
+        let remaining = data.bars[barIndex...]
+        var seen = Set<String>()
+        for bar in remaining {
+            seen.insert(String(bar.prefix(10)))  // "2024-MM-DD"
+        }
+        return seen.count
+    }
+
+    /// Unique trading days elapsed so far (inclusive of today).
+    var tradingDaysElapsed: Int {
+        var seen = Set<String>()
+        for bar in data.bars[...barIndex] {
+            seen.insert(String(bar.prefix(10)))
+        }
+        return seen.count
+    }
+
+    var totalTradingDays: Int {
+        var seen = Set<String>()
+        for bar in data.bars { seen.insert(String(bar.prefix(10))) }
+        return seen.count
+    }
+
+    /// Current prices for all market assets + CASH (always 1.0).
+    var prices: [String: Double] {
+        var d: [String: Double] = ["CASH": 1.0]
+        for a in data.assets { d[a.ticker] = currentPrice(for: a) }
+        return d
     }
 
     // MARK: Playback controls
@@ -122,11 +272,41 @@ final class GameEngine: ObservableObject {
             } else {
                 self.barIndex = next
             }
+            self.onTick?()
         }
         RunLoop.main.add(t, forMode: .common)
         timer = t
     }
 }
+
+// ============================================================
+// MARK: - Dividend Yields (approximate 2024 trailing 12-month)
+// ============================================================
+
+/// Annual dividend / distribution yield for each ticker.
+/// Tickers not listed (VXX, GLD, DJP, currency ETFs) pay no dividends.
+let dividendYields: [String: Double] = [
+    "XLK":      0.007,   // Technology          ~0.7%
+    "XLV":      0.016,   // Healthcare          ~1.6%
+    "XLF":      0.018,   // Financials          ~1.8%
+    "XLY":      0.008,   // Discretionary       ~0.8%
+    "XLP":      0.028,   // Staples             ~2.8%
+    "XLI":      0.015,   // Industrials         ~1.5%
+    "XLE":      0.035,   // Energy              ~3.5%
+    "XLU":      0.032,   // Utilities           ~3.2%
+    "XLB":      0.020,   // Materials           ~2.0%
+    "XLRE":     0.035,   // RE Sector           ~3.5%
+    "XLC":      0.009,   // Comm. Svcs          ~0.9%
+    "TLT":      0.038,   // Long Bonds          ~3.8% (monthly distributions)
+    "SHV":      0.052,   // T-Bills             ~5.2% (Fed funds rate)
+    "TIP":      0.025,   // Infl. Bonds         ~2.5%
+    "HYG":      0.060,   // Junk Bonds          ~6.0%
+    "LQD":      0.045,   // Corp Bonds          ~4.5%
+    "EFA":      0.030,   // Intl Stocks         ~3.0%
+    "EEM":      0.025,   // Emerging            ~2.5%
+    "VNQ":      0.040,   // REITs               ~4.0%
+    "SGOV":     0.052,   // Cash                ~5.2% (T-bill rate)
+]
 
 // ============================================================
 // MARK: - Data Loader
@@ -475,13 +655,22 @@ struct AssetDetailSheet: View {
                         .background(Color.white.opacity(0.04))
                         .clipShape(RoundedRectangle(cornerRadius: 12))
 
-                        // Group context
+                        // Ticker description
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("About \(series.group)")
-                                .font(.caption.weight(.semibold))
-                                .foregroundColor(Color.gray.opacity(0.7))
-
-                            Text(groupDescription(series.group))
+                            HStack(spacing: 8) {
+                                Text(series.ticker)
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .foregroundColor(Color(hex: series.color))
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
+                                    .background(Color(hex: series.color).opacity(0.15))
+                                    .clipShape(Capsule())
+                                Text(series.group.uppercased())
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.gray)
+                                    .tracking(0.8)
+                            }
+                            Text(tickerDescription(series.ticker))
                                 .font(.body)
                                 .foregroundColor(.gray)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -522,26 +711,69 @@ struct AssetDetailSheet: View {
         }
     }
 
-    private func groupDescription(_ g: String) -> String {
-        switch g {
-        case "US Sectors":
-            return "S&P 500 sector ETFs reveal rotation: risk-on money flows into Technology, Financials, and Discretionary; risk-off rotates into Utilities, Staples, and Healthcare."
-        case "Fixed Income":
-            return "Government bond ETFs are the classic safe haven. When stocks fall, investors pile in, driving prices up (yields down). Long Bonds (LTB) are most rate-sensitive."
-        case "Credit":
-            return "Corporate bonds sit between stocks and Treasuries on the risk spectrum. In stress, spreads widen: Junk Bonds (JNK) fall hard while Long Bonds (LTB) rise — the flight-to-safety trade in action."
-        case "Volatility":
-            return "'Panic' tracks VIX futures and spikes sharply when fear enters the market. In quiet years it decays from contango — it's expensive to hold but invaluable as a crash hedge."
-        case "Commodities":
-            return "Gold (GLD) is the original safe haven and benefits from fear and dollar weakness. The broad commodity basket (CMD) reflects global growth, energy demand, and inflation expectations."
-        case "Forex":
-            return "In global risk-off events, investors buy US Dollars (USD) and Japanese Yen (JPY) — both historically safe-haven currencies. The Euro (EUR) often weakens relative to USD in these periods."
-        case "International":
-            return "Non-US equities. Developed markets (DEV) roughly track US with a lag; Emerging Markets (EMG) add currency and political risk. Both underperform in strong-dollar environments."
-        case "Alternatives":
-            return "Real Estate Investment Trusts (REI) own income-producing property. They're sensitive to interest rates — they struggle as rates rise but recover strongly when rates fall."
-        case "Cash":
-            return "Near-cash short-term Treasuries. Earns a small yield with essentially zero duration risk. The 'do nothing' trade — always available as a harbour when everything else is volatile."
+    private func tickerDescription(_ ticker: String) -> String {
+        switch ticker {
+        // ── US Sectors ───────────────────────────────────────────────────
+        case "XLK":
+            return "The S&P 500's largest sector by weight, dominated by Apple, Microsoft, Nvidia, and Meta. Surged through 2024 on AI enthusiasm and blowout earnings. High beta — when the market rips, TEC rips harder; when it sells off, buckle up."
+        case "XLV":
+            return "Pharma giants, biotech, medical devices, and managed-care insurers. Defensive by nature — people don't stop needing drugs in a recession — but politically sensitive to any noise around drug pricing or insurance reform."
+        case "XLF":
+            return "Banks, brokerages, insurers, and asset managers. Loves a steep yield curve (cheap to borrow short, profitable to lend long). Watches credit quality closely — a spike in loan defaults hits this sector first."
+        case "XLY":
+            return "What consumers want but don't need: Amazon, Tesla, Home Depot, restaurants, hotels. Thrives when jobs are plentiful and consumers feel flush. One of the first sectors to crack when recession fears rise."
+        case "XLP":
+            return "Things people buy no matter what: Procter & Gamble, Coca-Cola, Walmart, Costco. Boring in bull markets but a classic hiding spot when volatility spikes. Steady dividends, predictable cash flows."
+        case "XLI":
+            return "Aerospace, defense, machinery, railroads, and logistics. Tracks the economic cycle closely and benefits from government infrastructure spending. Union Pacific, Caterpillar, and Boeing are major weights."
+        case "XLE":
+            return "Oil majors (Exxon, Chevron), refiners, and pipeline operators. Basically a leveraged bet on crude oil prices. Inflation hedge in commodity bull markets, vulnerable when global demand slows or OPEC opens the taps."
+        case "XLU":
+            return "Electric, gas, and water utilities. Slow revenue growth but fat, reliable dividends make them behave like bonds. Rising interest rates crush this sector (bonds become more attractive competition); falling rates lift it."
+        case "XLB":
+            return "Mining companies, chemical producers, and packaging firms. A pure cyclical play on global manufacturing and commodity prices. First to rally on a China stimulus headline, first to sell off on recession fears."
+        case "XLRE":
+            return "Real estate companies and REITs within the S&P 500 — office, retail, data centers, and cell towers. Extremely rate-sensitive: higher rates mean higher cap rates, lower property valuations, and tighter refinancing conditions."
+        case "XLC":
+            return "A hybrid sector: half growth (Alphabet, Meta dominate through digital advertising) and half legacy value (AT&T, Verizon). Ad revenue is cyclical; telecom is defensive. The two halves often pull in opposite directions."
+        // ── Fixed Income ─────────────────────────────────────────────────
+        case "TLT":
+            return "20+ year US Treasury bonds — the longest duration safe haven available. A 1% drop in long-term yields moves the price roughly +15%; a 1% rise does the opposite. When the market panics, money floods here. When inflation fears dominate, this bleeds."
+        case "SHV":
+            return "Ultra short-term Treasury bills maturing in 1–3 months. Basically cash with a tiny yield. Almost zero price volatility. In 2024, earning ~5% annualized with zero drama while equity investors rode a rollercoaster."
+        case "TIP":
+            return "Treasury Inflation-Protected Securities: principal adjusts with CPI, so your real return is preserved. Rallies when inflation expectations rise and when real yields fall. The market's real-time inflation thermometer."
+        // ── Credit ───────────────────────────────────────────────────────
+        case "HYG":
+            return "Bonds from below-investment-grade ('junk') companies — higher yields, higher default risk. In calm markets it quietly pays its coupon; in stress, credit spreads blow out and it sells off nearly as hard as equities. Watch the spread versus Treasuries as a recession indicator."
+        case "LQD":
+            return "Investment-grade corporate bonds from blue-chip companies like Apple, Microsoft, and JPMorgan. Offers more yield than Treasuries with less risk than junk. Falls when rates rise (duration) and when credit spreads widen (credit risk) — a double threat in stress events."
+        // ── Volatility ───────────────────────────────────────────────────
+        case "VXX":
+            return "Tracks short-term VIX futures — the market's 'fear gauge'. Spikes violently when stocks crash (VIX can double overnight), but bleeds steadily in calm markets due to the cost of rolling futures in contango. Expensive to hold long-term, explosive as a short-term hedge."
+        // ── Commodities ──────────────────────────────────────────────────
+        case "GLD":
+            return "Physical gold held in trust. The oldest store of value on earth — 5,000 years and counting. Rallies on fear, dollar weakness, and real yield declines. Pays no dividends, but protects purchasing power when paper currency looks shaky. Central banks bought record amounts in 2023–24."
+        case "DJP":
+            return "A broad basket of commodities: energy, metals, and agriculture. A bet on global industrial demand and inflation. China reopening or accelerating tends to be rocket fuel; a US slowdown drains it. Also benefits when the dollar weakens."
+        // ── Forex ────────────────────────────────────────────────────────
+        case "UUP":
+            return "Tracks the US Dollar Index (DXY) against a basket of major currencies. Strengthens when US rates are high relative to peers, or when global panic sends everyone scrambling for dollars. A rising dollar is headwind for commodities, gold, and emerging markets."
+        case "EURUSD=X":
+            return "Euros per US dollar — the world's most traded currency pair. Weakens when the ECB lags behind the Fed on rates, or when European growth disappoints. Sensitive to energy prices (Europe imports most of its energy) and geopolitical stress on the continent."
+        case "JPY=X":
+            return "Japanese Yen — the classic carry-trade funding currency. Japan's near-zero rates made the Yen cheap to borrow for years. When carry trades unwind in a global panic, everyone rushes to buy back Yen, causing sharp spikes. A sudden Yen surge is often a signal that risk is being unwound globally."
+        // ── International ────────────────────────────────────────────────
+        case "EFA":
+            return "Developed-market stocks in Europe, Australasia, and the Far East — think Nestlé, Toyota, HSBC, SAP. Broadly tracks US equities with a lag, but currency moves matter. A strong dollar is a headwind; a weak dollar amplifies returns for US investors."
+        case "EEM":
+            return "Emerging-market stocks spanning China, India, Brazil, Taiwan, South Korea, and more. Higher long-run growth potential than developed markets, but with political risk, currency volatility, and deep sensitivity to US interest rates and dollar strength. When the Fed hikes, money flows out; when it cuts, money pours in."
+        // ── Alternatives ─────────────────────────────────────────────────
+        case "VNQ":
+            return "A broad REIT fund owning apartments, offices, data centers, cell towers, shopping malls, and warehouses. Generous dividend yields, but duration risk is real — higher interest rates directly increase the discount rate on future rental income. Watched carefully as a leading indicator of the commercial real estate cycle."
+        // ── Cash ─────────────────────────────────────────────────────────
+        case "SGOV":
+            return "0–3 month Treasury bills — as close to risk-free as it gets. With the Fed funds rate above 5% in 2024, this 'do nothing' trade was quietly earning more than many active strategies. No drama, no drawdowns, just steady compounding while you wait for a better entry elsewhere."
         default:
             return "Watch how this instrument correlates with the others to identify the current macro regime: risk-on, risk-off, reflation, or flight-to-safety."
         }
@@ -570,55 +802,661 @@ struct StatBox: View {
 }
 
 // ============================================================
-// MARK: - Game View
+// MARK: - Portfolio Views
 // ============================================================
 
-struct GameView: View {
-    @ObservedObject var engine: GameEngine
-    @State private var selected: AssetSeries? = nil
+struct HoldingRow: View {
+    let ticker:    String
+    let value:     Double   // current dollar value
+    let fraction:  Double   // 0–1 share of total portfolio
+    let returnPct: Double   // return since buy (0 for CASH)
+    let color:     Color
+    let name:      String
+    let divPaid:   Double   // estimated dividends paid into cash so far
 
-    let columns = [GridItem(.adaptive(minimum: 82, maximum: 140), spacing: 8)]
+    private let green = Color(red: 0.2, green: 0.9, blue: 0.48)
+
+    var body: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(color)
+                .frame(width: 5, height: 40)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(ticker == "CASH" ? "Cash" : name)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.white)
+                HStack(spacing: 8) {
+                    if ticker != "CASH" {
+                        Text(String(format: "%+.1f%% price", returnPct * 100))
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(returnPct >= 0 ? green : Color(red: 0.95, green: 0.28, blue: 0.32))
+                    } else {
+                        Text("Safe haven · always $1")
+                            .font(.system(size: 11))
+                            .foregroundColor(.gray)
+                    }
+                    if divPaid > 0.001 && value > 0 {
+                        Text(String(format: "+%.1f%% div", divPaid / value * 100))
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(green.opacity(0.7))
+                    }
+                }
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(String(format: "$%.0f", value))
+                    .font(.system(size: 17, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white)
+                Text(String(format: "%.1f%%", fraction * 100))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.gray)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+// ── Invest Sheet ─────────────────────────────────────────────
+
+struct InvestSheet: View {
+    let target:    AssetSeries
+    @ObservedObject var engine:    GameEngine
+    @ObservedObject var portfolio: Portfolio
+    @Environment(\.dismiss) private var dismiss
+    @State private var showDetail = false
+
+    // Step 1: how much to invest (as % of total portfolio)
+    @State private var targetPct: Double = 0    // 0–100
+
+    // Step 2: frozen snapshot taken when the user taps "Next"
+    @State private var step = 1
+    @State private var sourceAlloc: [String: Double] = [:]
+
+    // Snapshot types — prices and source values frozen at step-2 entry so
+    // live ticks don't shift the math while the user is allocating.
+    private struct Snap {
+        let prices:        [String: Double]
+        let totalValue:    Double
+        let targetDollars: Double
+        let sources:       [(ticker: String, value: Double, name: String, color: Color)]
+    }
+    @State private var snap: Snap? = nil
+
+    // Step 1 uses live prices (that's fine — the user hasn't committed yet)
+    private var livePrices:     [String: Double] { engine.prices }
+    private var liveTotalValue: Double           { portfolio.totalValue(prices: livePrices) }
+    private var liveTargetDollars: Double        { liveTotalValue * targetPct / 100 }
+
+    // Step 2 uses the snapshot exclusively
+    private var targetDollars: Double {
+        snap?.targetDollars ?? liveTargetDollars
+    }
+
+    private var sources: [(ticker: String, value: Double, name: String, color: Color)] {
+        if let s = snap { return s.sources }
+        return liveSources(prices: livePrices)
+    }
+
+    private func liveSources(prices: [String: Double])
+        -> [(ticker: String, value: Double, name: String, color: Color)]
+    {
+        portfolio.holdings.keys
+            .filter { $0 != target.ticker }
+            .sorted { a, b in
+                if a == "CASH" { return false }
+                if b == "CASH" { return true }
+                return portfolio.currentValue(ticker: a, prices: prices)
+                     > portfolio.currentValue(ticker: b, prices: prices)
+            }
+            .map { t in
+                let val  = portfolio.currentValue(ticker: t, prices: prices)
+                let name = t == "CASH" ? "Cash" : (engine.series(for: t)?.name ?? t)
+                let clr: Color = t == "CASH"
+                    ? Color(hex: "#6B7280")
+                    : Color(hex: engine.series(for: t)?.color ?? "#888")
+                return (t, val, name, clr)
+            }
+    }
+
+    private var allocatedTotal: Double {
+        sourceAlloc.values.reduce(0, +)
+    }
+
+    private var canProceed: Bool {
+        step == 1
+            ? targetPct > 0
+            : abs(allocatedTotal - targetDollars) < 1.0
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color(hex: "#080D18").ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: 20) {
+                        // ── Target bucket header (tap for detail) ─────
+                        Button(action: { showDetail = true }) {
+                            HStack(spacing: 14) {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(Color(hex: target.color).opacity(0.2))
+                                        .frame(width: 52, height: 52)
+                                    Text(target.code)
+                                        .font(.system(size: 14, weight: .black, design: .monospaced))
+                                        .foregroundColor(Color(hex: target.color))
+                                }
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(target.name)
+                                        .font(.title3.bold())
+                                        .foregroundColor(.white)
+                                    Text(String(format: "Current price: %.2f  ·  YTD %+.1f%%",
+                                                engine.currentPrice(for: target),
+                                                engine.ytdReturn(for: target) * 100))
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                }
+                                Spacer()
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 16))
+                                    .foregroundColor(Color(hex: target.color).opacity(0.7))
+                            }
+                            .padding(16)
+                            .background(Color.white.opacity(0.04))
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .strokeBorder(Color(hex: target.color).opacity(0.18), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .sheet(isPresented: $showDetail) {
+                            AssetDetailSheet(
+                                series:    target,
+                                ytdReturn: engine.ytdReturn(for: target),
+                                price:     engine.currentPrice(for: target)
+                            )
+                            .presentationDetents([.medium, .large])
+                        }
+
+                        if step == 1 {
+                            step1Body
+                        } else {
+                            step2Body
+                        }
+                    }
+                    .padding(20)
+                }
+            }
+            .navigationTitle(step == 1 ? "How much?" : "Fund from")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(step == 1 ? "Cancel" : "Back") {
+                        if step == 1 { dismiss() } else { step = 1 }
+                    }
+                    .foregroundColor(.gray)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(step == 1 ? "Next" : "Invest") {
+                        if step == 1 {
+                            // Freeze everything at this moment
+                            let p = livePrices
+                            let tv = liveTotalValue
+                            snap = Snap(
+                                prices:        p,
+                                totalValue:    tv,
+                                targetDollars: tv * targetPct / 100,
+                                sources:       liveSources(prices: p)
+                            )
+                            sourceAlloc = [:]
+                            step = 2
+                        } else {
+                            portfolio.invest(
+                                targetTicker:  target.ticker,
+                                targetDollars: targetDollars,
+                                sources:       sourceAlloc,
+                                prices:        snap?.prices ?? livePrices,
+                                barIndex:      engine.barIndex
+                            )
+                            dismiss()
+                        }
+                    }
+                    .disabled(!canProceed)
+                    .foregroundColor(canProceed ? .orange : .gray)
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+
+    // ── Step 1: pick investment size ─────────────────────────
+
+    private var step1Body: some View {
+        VStack(spacing: 20) {
+            // Dollar display
+            VStack(spacing: 6) {
+                Text(String(format: "$%.0f", liveTargetDollars))
+                    .font(.system(size: 48, weight: .black, design: .monospaced))
+                    .foregroundColor(.white)
+                    .contentTransition(.numericText())
+                Text(String(format: "%.0f%% of your $%.0f portfolio", targetPct, liveTotalValue))
+                    .font(.subheadline)
+                    .foregroundColor(.gray)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(24)
+            .background(Color.white.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+
+            // Percentage buttons
+            VStack(spacing: 12) {
+                ForEach([1.0, 5.0, 10.0, 25.0], id: \.self) { step in
+                    HStack(spacing: 10) {
+                        pctButton(label: "+\(Int(step))%", delta: step)
+                        pctButton(label: "-\(Int(step))%", delta: -step)
+                    }
+                }
+                Button(action: { targetPct = 100 }) {
+                    Text("All In")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(.orange)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.orange.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+            }
+        }
+    }
+
+    private func pctButton(label: String, delta: Double) -> some View {
+        Button(action: {
+            targetPct = min(100, max(0, targetPct + delta))
+        }) {
+            Text(label)
+                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .foregroundColor(delta > 0 ? .white : Color(red: 0.95, green: 0.28, blue: 0.32))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    // ── Step 2: pick funding sources ─────────────────────────
+
+    private var step2Body: some View {
+        VStack(spacing: 16) {
+            // Allocation progress
+            VStack(spacing: 6) {
+                HStack {
+                    Text("Allocated")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Spacer()
+                    Text(String(format: "$%.0f / $%.0f", allocatedTotal, targetDollars))
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundColor(abs(allocatedTotal - targetDollars) < 0.5 ? .green : .white)
+                }
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.07))
+                        Capsule()
+                            .fill(LinearGradient(
+                                colors: [.orange, .yellow],
+                                startPoint: .leading, endPoint: .trailing))
+                            .frame(width: geo.size.width * min(1, allocatedTotal / max(1, targetDollars)))
+                            .animation(.spring(duration: 0.25), value: allocatedTotal)
+                    }
+                }
+                .frame(height: 5)
+            }
+            .padding(16)
+            .background(Color.white.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+
+            // Source rows
+            ForEach(sources, id: \.ticker) { src in
+                SourceRow(
+                    ticker:       src.ticker,
+                    name:         src.name,
+                    color:        src.color,
+                    holdingValue: src.value,
+                    allocated:    sourceAlloc[src.ticker] ?? 0,
+                    onAdd: { dollars in
+                        let cur   = sourceAlloc[src.ticker] ?? 0
+                        // Can't exceed the holding, and can't exceed remaining target budget
+                        let budget = targetDollars - allocatedTotal + cur  // budget available for this row
+                        sourceAlloc[src.ticker] = min(src.value, min(budget, max(0, cur + dollars)))
+                    }
+                )
+            }
+
+            if sources.isEmpty {
+                Text("Nothing to sell — your portfolio only holds this asset.")
+                    .font(.callout)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+                    .padding(20)
+            }
+        }
+    }
+}
+
+struct SourceRow: View {
+    let ticker:       String
+    let name:         String
+    let color:        Color
+    let holdingValue: Double
+    let allocated:    Double
+    let onAdd:        (Double) -> Void
+
+    private let red = Color(red: 0.95, green: 0.28, blue: 0.32)
+
+    var body: some View {
+        VStack(spacing: 10) {
+            // ── Header: name + allocated amount ──────────────
+            HStack {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(color)
+                    .frame(width: 4, height: 36)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ticker == "CASH" ? "Cash" : name)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                    Text(String(format: "Available: $%.0f", holdingValue))
+                        .font(.system(size: 11))
+                        .foregroundColor(.gray)
+                }
+                Spacer()
+                Text(String(format: "$%.0f", allocated))
+                    .font(.system(size: 15, weight: .bold, design: .monospaced))
+                    .foregroundColor(allocated > 0 ? .orange : .gray)
+            }
+
+            // ── +/- buttons ──────────────────────────────────
+            HStack(spacing: 6) {
+                ForEach([5.0, 10.0, 25.0], id: \.self) { pct in
+                    // Add
+                    Button(action: { onAdd(holdingValue * pct / 100) }) {
+                        Text("+\(Int(pct))%")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(Color.white.opacity(0.07))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    // Subtract
+                    Button(action: { onAdd(-(holdingValue * pct / 100)) }) {
+                        Text("-\(Int(pct))%")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundColor(red)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(Color.red.opacity(0.07))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+
+            // ── All / Clear ───────────────────────────────────
+            HStack(spacing: 8) {
+                Button(action: { onAdd(holdingValue) }) {
+                    Text("All")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.orange)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(Color.orange.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                Button(action: { onAdd(-allocated) }) {
+                    Text("Clear")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(red)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(Color.red.opacity(0.10))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+// ── Portfolio Page ────────────────────────────────────────────
+
+struct PortfolioView: View {
+    @ObservedObject var engine:    GameEngine
+    @ObservedObject var portfolio: Portfolio
+
+
+    private var prices: [String: Double] { engine.prices }
+    private var total:  Double           { portfolio.totalValue(prices: prices) }
+
+    private var rows: [(ticker: String, value: Double, fraction: Double, ret: Double, color: Color, name: String)] {
+        portfolio.holdings.keys
+            .sorted { a, b in
+                if a == "CASH" { return false }
+                if b == "CASH" { return true }
+                return portfolio.currentValue(ticker: a, prices: prices)
+                     > portfolio.currentValue(ticker: b, prices: prices)
+            }
+            .map { t in
+                let val  = portfolio.currentValue(ticker: t, prices: prices)
+                let frac = total > 0 ? val / total : 0
+                let ret  = t == "CASH" ? 0.0 : portfolio.returnSinceBuy(ticker: t, prices: prices)
+                let name = t == "CASH" ? "Cash" : (engine.series(for: t)?.name ?? t)
+                let clr: Color = t == "CASH"
+                    ? Color(hex: "#6B7280")
+                    : Color(hex: engine.series(for: t)?.color ?? "#888")
+                return (t, val, frac, ret, clr, name)
+            }
+    }
 
     var body: some View {
         ZStack {
             Color(hex: "#070B12").ignoresSafeArea()
 
             VStack(spacing: 0) {
-                GameHeader(engine: engine)
+                // ── Total value header ────────────────────────────
+                VStack(spacing: 0) {
+                    // Date + days remaining strip
+                    HStack {
+                        Text(formatBar(engine.currentBar))
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(.gray)
+                        Spacer()
+                        let daysLeft = engine.tradingDaysRemaining
+                        let daysGone = engine.tradingDaysElapsed
+                        let total2   = engine.totalTradingDays
+                        Text("\(daysLeft) trading day\(daysLeft == 1 ? "" : "s") left")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(daysLeft <= 20 ? .orange : .gray)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
+                    .padding(.bottom, 10)
 
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 8) {
-                        ForEach(engine.groups) { group in
-                            Section {
-                                ForEach(group.assets) { series in
-                                    AssetTile(
-                                        series:    series,
-                                        ytdReturn: engine.ytdReturn(for: series)
-                                    )
-                                    .onTapGesture { selected = series }
+                    // Year progress bar
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.07))
+                            Capsule()
+                                .fill(LinearGradient(
+                                    colors: [.orange, .yellow],
+                                    startPoint: .leading, endPoint: .trailing))
+                                .frame(width: geo.size.width * engine.progress)
+                                .animation(.linear(duration: engine.speed.tickInterval * 0.85),
+                                           value: engine.progress)
+                        }
+                    }
+                    .frame(height: 3)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 16)
+
+                    Divider().opacity(0.08)
+
+                    // Portfolio value + P&L
+                    VStack(spacing: 6) {
+                        Text("Portfolio Value")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.gray)
+                            .tracking(1)
+                        Text(String(format: "$%.0f", total))
+                            .font(.system(size: 42, weight: .black, design: .monospaced))
+                            .foregroundColor(.white)
+                            .contentTransition(.numericText())
+
+                        let pnl = total - Portfolio.startingCash
+                        let ret = pnl / Portfolio.startingCash
+                        let pnlColor: Color = ret >= 0
+                            ? Color(red: 0.2, green: 0.9, blue: 0.48)
+                            : Color(red: 0.95, green: 0.28, blue: 0.32)
+
+                        HStack(spacing: 12) {
+                            Text(String(format: "%+$%.0f", pnl))
+                                .font(.system(size: 16, weight: .bold, design: .monospaced))
+                                .foregroundColor(pnlColor)
+                            Text(String(format: "(%+.2f%%)", ret * 100))
+                                .font(.system(size: 14, design: .monospaced))
+                                .foregroundColor(pnlColor.opacity(0.75))
+                        }
+
+                        // Dividends received
+                        if portfolio.totalDividendsReceived > 0.5 {
+                            HStack(spacing: 5) {
+                                Image(systemName: "leaf.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(Color(red: 0.2, green: 0.9, blue: 0.48))
+                                Text(String(format: "%.2f%% yield collected",
+                                            portfolio.totalDividendsReceived / Portfolio.startingCash * 100))
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(Color(red: 0.2, green: 0.9, blue: 0.48).opacity(0.8))
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(Color(red: 0.2, green: 0.9, blue: 0.48).opacity(0.08))
+                            .clipShape(Capsule())
+                        }
+                    }
+                    .padding(.vertical, 16)
+                }
+                .frame(maxWidth: .infinity)
+                .background(Color(hex: "#0A0F1C"))
+
+                // ── Allocation bar ────────────────────────────────
+                if !rows.isEmpty {
+                    GeometryReader { geo in
+                        HStack(spacing: 2) {
+                            ForEach(rows, id: \.ticker) { row in
+                                if row.fraction > 0.01 {
+                                    row.color
+                                        .frame(width: geo.size.width * row.fraction)
                                 }
-                            } header: {
-                                Text(group.name.uppercased())
-                                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                                    .foregroundColor(Color.gray.opacity(0.55))
-                                    .tracking(1.2)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.top, 16)
-                                    .padding(.bottom, 2)
                             }
                         }
                     }
-                    .padding(10)
+                    .frame(height: 6)
+                    .clipShape(Capsule())
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                }
+
+                // ── Holdings list ─────────────────────────────────
+                ZStack(alignment: .bottom) {
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(rows, id: \.ticker) { row in
+                                HoldingRow(
+                                    ticker:     row.ticker,
+                                    value:      row.value,
+                                    fraction:   row.fraction,
+                                    returnPct:  row.ret,
+                                    color:      row.color,
+                                    name:       row.name,
+                                    divPaid:    portfolio.dividendsPaid(
+                                                    ticker:     row.ticker,
+                                                    prices:     prices,
+                                                    totalBars:  engine.totalBars)
+                                )
+                                .padding(.horizontal, 16)
+                                Divider().opacity(0.1).padding(.horizontal, 16)
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+
                 }
             }
         }
-        .sheet(item: $selected) { s in
-            AssetDetailSheet(
-                series:    s,
-                ytdReturn: engine.ytdReturn(for: s),
-                price:     engine.currentPrice(for: s)
-            )
-            .presentationDetents([.medium, .large])
+    }
+}
+
+// ============================================================
+// MARK: - Game View
+// ============================================================
+
+struct GameView: View {
+    @ObservedObject var engine:    GameEngine
+    @ObservedObject var portfolio: Portfolio
+    @State private var investTarget: AssetSeries? = nil
+
+    let columns = [GridItem(.adaptive(minimum: 82, maximum: 140), spacing: 8)]
+
+    var body: some View {
+        TabView {
+            // ── Tab 1: Market ─────────────────────────────────
+            ZStack {
+                Color(hex: "#070B12").ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    GameHeader(engine: engine)
+
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 8) {
+                            ForEach(engine.groups) { group in
+                                Section {
+                                    ForEach(group.assets) { series in
+                                        AssetTile(
+                                            series:    series,
+                                            ytdReturn: engine.ytdReturn(for: series)
+                                        )
+                                        .onTapGesture { investTarget = series }
+                                    }
+                                } header: {
+                                    Text(group.name.uppercased())
+                                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                        .foregroundColor(Color.gray.opacity(0.55))
+                                        .tracking(1.2)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.top, 16)
+                                        .padding(.bottom, 2)
+                                }
+                            }
+                        }
+                        .padding(10)
+                    }
+                }
+            }
+            .tabItem { Label("Market", systemImage: "chart.bar.fill") }
+
+            // ── Tab 2: Portfolio ──────────────────────────────
+            PortfolioView(engine: engine, portfolio: portfolio)
+                .tabItem { Label("Portfolio", systemImage: "briefcase.fill") }
+        }
+        .sheet(item: $investTarget) { s in
+            InvestSheet(target: s, engine: engine, portfolio: portfolio)
+                .presentationDetents([.medium, .large])
         }
     }
 }
@@ -628,17 +1466,24 @@ struct GameView: View {
 // ============================================================
 
 struct ContentView: View {
-    @StateObject private var engine = GameEngine(data: loadGameData())
+    @StateObject private var engine    = GameEngine(data: loadGameData())
+    @StateObject private var portfolio = Portfolio()
     @State private var started = false
 
     var body: some View {
         Group {
             if started {
-                GameView(engine: engine)
+                GameView(engine: engine, portfolio: portfolio)
             } else {
                 IntroView(onStart: { started = true })
             }
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            engine.onTick = { [weak engine] in
+                guard let engine else { return }
+                portfolio.accrueDiv(prices: engine.prices, totalBars: engine.totalBars)
+            }
+        }
     }
 }
