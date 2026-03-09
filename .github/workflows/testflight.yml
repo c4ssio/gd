@@ -1,0 +1,146 @@
+name: Build & Upload to TestFlight
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-upload:
+    name: Build, Archive, Upload
+    runs-on: macos-15   # Xcode 26 is pre-installed on macos-15 runners
+
+    env:
+      SCHEME: SwiftST
+      BUNDLE_ID: PaesLemeST
+      TEAM_ID: J8D7WJR5PY
+      PROJECT_PATH: SwiftST.swiftpm
+      ARCHIVE_PATH: ${{ github.workspace }}/build/SwiftST.xcarchive
+      EXPORT_PATH: ${{ github.workspace }}/build/export
+      KEYCHAIN_NAME: build.keychain
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Select Xcode 26 (required: iOS 26 SDK mandatory from Apr 28 2026)
+      - name: Select Xcode 26
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.0'
+
+      # ── 3. Increment build number (use GitHub run number so it always rises)
+      - name: Set build number
+        run: |
+          BUILD_NUMBER=${{ github.run_number }}
+          echo "Setting CFBundleVersion to $BUILD_NUMBER"
+          /usr/libexec/PlistBuddy \
+            -c "Set :products:0:bundleVersion $BUILD_NUMBER" \
+            SwiftST.swiftpm/Package.swift 2>/dev/null || true
+          # Swift Playgrounds stores bundleVersion inside Package.swift via SPM metadata.
+          # We patch it with sed as PlistBuddy won't work on Swift source:
+          sed -i '' \
+            "s/bundleVersion: \"[^\"]*\"/bundleVersion: \"$BUILD_NUMBER\"/" \
+            SwiftST.swiftpm/Package.swift
+          echo "Build number set to: $BUILD_NUMBER"
+
+      # ── 4. Set up temporary keychain ───────────────────────────────────────
+      - name: Create temporary keychain
+        run: |
+          security create-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" $KEYCHAIN_NAME
+          security set-keychain-settings -lut 21600 $KEYCHAIN_NAME
+          security unlock-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" $KEYCHAIN_NAME
+          # Make it the default so xcodebuild finds it
+          security list-keychains -d user -s $KEYCHAIN_NAME $(security list-keychains -d user | xargs)
+
+      # ── 5. Import distribution certificate ────────────────────────────────
+      - name: Import distribution certificate
+        run: |
+          echo "${{ secrets.CERTIFICATES_P12 }}" | base64 --decode > /tmp/cert.p12
+          security import /tmp/cert.p12 \
+            -k $KEYCHAIN_NAME \
+            -P "${{ secrets.CERTIFICATES_P12_PASSWORD }}" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/xcodebuild
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "${{ secrets.KEYCHAIN_PASSWORD }}" \
+            $KEYCHAIN_NAME
+          rm /tmp/cert.p12
+
+      # ── 6. Install provisioning profile ───────────────────────────────────
+      - name: Install provisioning profile
+        run: |
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          echo "${{ secrets.PROVISIONING_PROFILE }}" | base64 --decode \
+            > ~/Library/MobileDevice/Provisioning\ Profiles/distribution.mobileprovision
+
+      # ── 7. Set up App Store Connect API key ───────────────────────────────
+      - name: Set up App Store Connect API key
+        run: |
+          mkdir -p ~/.private_keys
+          echo "${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}" \
+            > ~/.private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8
+
+      # ── 8. Resolve Swift packages ──────────────────────────────────────────
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -scheme $SCHEME \
+            -project $PROJECT_PATH
+
+      # ── 9. Archive ─────────────────────────────────────────────────────────
+      - name: Archive
+        run: |
+          mkdir -p build
+          xcodebuild archive \
+            -scheme $SCHEME \
+            -project $PROJECT_PATH \
+            -destination "generic/platform=iOS" \
+            -archivePath "$ARCHIVE_PATH" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM=$TEAM_ID \
+            CODE_SIGN_IDENTITY="iPhone Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="distribution" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_NAME" \
+            | xcpretty --color || xcodebuild archive \
+              -scheme $SCHEME \
+              -project $PROJECT_PATH \
+              -destination "generic/platform=iOS" \
+              -archivePath "$ARCHIVE_PATH" \
+              CODE_SIGN_STYLE=Manual \
+              DEVELOPMENT_TEAM=$TEAM_ID \
+              CODE_SIGN_IDENTITY="iPhone Distribution" \
+              PROVISIONING_PROFILE_SPECIFIER="distribution" \
+              OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_NAME"
+
+      # ── 10. Export IPA ─────────────────────────────────────────────────────
+      - name: Export IPA
+        run: |
+          mkdir -p "$EXPORT_PATH"
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_PATH" \
+            -exportOptionsPlist ExportOptions.plist \
+            -allowProvisioningUpdates
+
+      # ── 11. Upload to TestFlight ───────────────────────────────────────────
+      # xcrun altool is deprecated; use xcrun altool --upload-app is gone in
+      # Xcode 26. The replacement is xcrun altool → xcrun altool (Xcode 14+
+      # shows deprecation), proper replacement is via App Store Connect API
+      # directly with xcrun altool or the official action below.
+      - name: Upload to TestFlight
+        uses: apple-actions/upload-testflight-build@v1
+        with:
+          app-path: ${{ env.EXPORT_PATH }}/SwiftST.ipa
+          issuer-id: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
+          api-key-id: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          api-private-key: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
+
+      # ── 12. Clean up keychain ──────────────────────────────────────────────
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain $KEYCHAIN_NAME || true
+          rm -f ~/.private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8
