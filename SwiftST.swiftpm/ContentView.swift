@@ -1462,7 +1462,7 @@ struct GameView: View {
         }
         .sheet(item: $investTarget) { s in
             InvestSheet(target: s, engine: engine, portfolio: portfolio)
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
         }
     }
 }
