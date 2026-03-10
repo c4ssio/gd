@@ -874,6 +874,8 @@ struct InvestSheet: View {
     // Step 2: frozen snapshot taken when the user taps "Next"
     @State private var step = 1
     @State private var sourceAlloc: [String: Double] = [:]
+    // Optional override so the user can amend the target on step 2
+    @State private var amendedTargetDollars: Double? = nil
 
     // Snapshot types — prices and source values frozen at step-2 entry so
     // live ticks don't shift the math while the user is allocating.
@@ -886,13 +888,14 @@ struct InvestSheet: View {
     @State private var snap: Snap? = nil
 
     // Step 1 uses live prices (that's fine — the user hasn't committed yet)
-    private var livePrices:     [String: Double] { engine.prices }
-    private var liveTotalValue: Double           { portfolio.totalValue(prices: livePrices) }
-    private var liveTargetDollars: Double        { liveTotalValue * targetPct / 100 }
+    private var livePrices:      [String: Double] { engine.prices }
+    private var liveTotalValue:  Double           { portfolio.totalValue(prices: livePrices) }
+    private var liveCashValue:   Double           { portfolio.currentValue(ticker: "CASH", prices: livePrices) }
+    private var liveTargetDollars: Double         { liveTotalValue * targetPct / 100 }
 
-    // Step 2 uses the snapshot exclusively
+    // Step 2 uses the snapshot exclusively (or an amended override)
     private var targetDollars: Double {
-        snap?.targetDollars ?? liveTargetDollars
+        amendedTargetDollars ?? snap?.targetDollars ?? liveTargetDollars
     }
 
     private var sources: [(ticker: String, value: Double, name: String, color: Color)] {
@@ -928,7 +931,7 @@ struct InvestSheet: View {
     private var canProceed: Bool {
         step == 1
             ? targetPct > 0
-            : abs(allocatedTotal - targetDollars) < 1.0
+            : targetDollars > 0 && abs(allocatedTotal - targetDollars) < 1.0
     }
 
     var body: some View {
@@ -1002,7 +1005,12 @@ struct InvestSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(step == 1 ? "Cancel" : "Back") {
-                        if step == 1 { dismiss() } else { step = 1 }
+                        if step == 1 {
+                            dismiss()
+                        } else {
+                            amendedTargetDollars = nil
+                            step = 1
+                        }
                     }
                     .foregroundColor(.gray)
                 }
@@ -1044,7 +1052,7 @@ struct InvestSheet: View {
     private var step1Body: some View {
         VStack(spacing: 20) {
             // Dollar display
-            VStack(spacing: 6) {
+            VStack(spacing: 8) {
                 Text(String(format: "$%.0f", liveTargetDollars))
                     .font(.system(size: 48, weight: .black, design: .monospaced))
                     .foregroundColor(.white)
@@ -1052,6 +1060,18 @@ struct InvestSheet: View {
                 Text(String(format: "%.0f%% of your $%.0f portfolio", targetPct, liveTotalValue))
                     .font(.subheadline)
                     .foregroundColor(.gray)
+
+                // Cash vs invested breakdown
+                HStack(spacing: 16) {
+                    Label(String(format: "$%.0f cash", liveCashValue), systemImage: "banknote")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(Color(hex: "#9CA3AF"))
+                    Text("·")
+                        .foregroundColor(.gray.opacity(0.4))
+                    Label(String(format: "$%.0f invested", liveTotalValue - liveCashValue), systemImage: "chart.line.uptrend.xyaxis")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.gray.opacity(0.7))
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(24)
@@ -1066,14 +1086,29 @@ struct InvestSheet: View {
                         pctButton(label: "-\(Int(step))%", delta: -step)
                     }
                 }
-                Button(action: { targetPct = 100 }) {
-                    Text("All In")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundColor(.orange)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.orange.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                HStack(spacing: 10) {
+                    // Use Cash — sets target to the cash fraction of the portfolio
+                    Button(action: {
+                        let cashPct = liveTotalValue > 0 ? (liveCashValue / liveTotalValue) * 100 : 0
+                        targetPct = min(100, max(0, cashPct))
+                    }) {
+                        Text("Use Cash")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundColor(Color(hex: "#9CA3AF"))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.white.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    Button(action: { targetPct = 100 }) {
+                        Text("All In")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundColor(.orange)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.orange.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
                 }
             }
         }
@@ -1098,7 +1133,7 @@ struct InvestSheet: View {
     private var step2Body: some View {
         VStack(spacing: 16) {
             // Allocation progress
-            VStack(spacing: 6) {
+            VStack(spacing: 8) {
                 HStack {
                     Text("Allocated")
                         .font(.caption)
@@ -1120,6 +1155,27 @@ struct InvestSheet: View {
                     }
                 }
                 .frame(height: 5)
+
+                // Amend button — lets the user reduce the target to what's already allocated
+                if allocatedTotal > 0 && allocatedTotal < targetDollars - 1 {
+                    Button(action: {
+                        amendedTargetDollars = allocatedTotal
+                    }) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "pencil.circle")
+                                .font(.system(size: 12))
+                            Text(String(format: "Amend to $%.0f", allocatedTotal))
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundColor(.orange.opacity(0.85))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .background(Color.orange.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .animation(.easeInOut(duration: 0.2), value: allocatedTotal)
+                }
             }
             .padding(16)
             .background(Color.white.opacity(0.04))
