@@ -936,8 +936,10 @@ struct InvestSheet: View {
             ZStack {
                 Color(hex: "#080D18").ignoresSafeArea()
 
+                ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 20) {
+                        Color.clear.frame(height: 0).id("top")
                         // ── Target bucket header (tap for detail) ─────
                         Button(action: { showDetail = true }) {
                             HStack(spacing: 14) {
@@ -990,6 +992,10 @@ struct InvestSheet: View {
                     }
                     .padding(20)
                 }
+                .onChange(of: step) { _ in
+                    withAnimation { proxy.scrollTo("top", anchor: .top) }
+                }
+                } // ScrollViewReader
             }
             .navigationTitle(step == 1 ? "How much?" : "Fund from")
             .navigationBarTitleDisplayMode(.inline)
