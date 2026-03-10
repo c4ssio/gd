@@ -17,5 +17,7 @@
         <key>PaesLemeST</key>
         <string>distribution</string>
     </dict>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
 </dict>
 </plist>
