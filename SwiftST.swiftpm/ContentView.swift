@@ -888,10 +888,9 @@ struct InvestSheet: View {
     @State private var snap: Snap? = nil
 
     // Step 1 uses live prices (that's fine — the user hasn't committed yet)
-    private var livePrices:      [String: Double] { engine.prices }
-    private var liveTotalValue:  Double           { portfolio.totalValue(prices: livePrices) }
-    private var liveCashValue:   Double           { portfolio.currentValue(ticker: "CASH", prices: livePrices) }
-    private var liveTargetDollars: Double         { liveTotalValue * targetPct / 100 }
+    private var livePrices:        [String: Double] { engine.prices }
+    private var liveTotalValue:    Double           { portfolio.totalValue(prices: livePrices) }
+    private var liveTargetDollars: Double           { liveTotalValue * targetPct / 100 }
 
     // Step 2 uses the snapshot exclusively (or an amended override)
     private var targetDollars: Double {
@@ -1052,7 +1051,7 @@ struct InvestSheet: View {
     private var step1Body: some View {
         VStack(spacing: 20) {
             // Dollar display
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 Text(String(format: "$%.0f", liveTargetDollars))
                     .font(.system(size: 48, weight: .black, design: .monospaced))
                     .foregroundColor(.white)
@@ -1060,18 +1059,6 @@ struct InvestSheet: View {
                 Text(String(format: "%.0f%% of your $%.0f portfolio", targetPct, liveTotalValue))
                     .font(.subheadline)
                     .foregroundColor(.gray)
-
-                // Cash vs invested breakdown
-                HStack(spacing: 16) {
-                    Label(String(format: "$%.0f cash", liveCashValue), systemImage: "banknote")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(Color(hex: "#9CA3AF"))
-                    Text("·")
-                        .foregroundColor(.gray.opacity(0.4))
-                    Label(String(format: "$%.0f invested", liveTotalValue - liveCashValue), systemImage: "chart.line.uptrend.xyaxis")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.gray.opacity(0.7))
-                }
             }
             .frame(maxWidth: .infinity)
             .padding(24)
@@ -1086,29 +1073,14 @@ struct InvestSheet: View {
                         pctButton(label: "-\(Int(step))%", delta: -step)
                     }
                 }
-                HStack(spacing: 10) {
-                    // Use Cash — sets target to the cash fraction of the portfolio
-                    Button(action: {
-                        let cashPct = liveTotalValue > 0 ? (liveCashValue / liveTotalValue) * 100 : 0
-                        targetPct = min(100, max(0, cashPct))
-                    }) {
-                        Text("Use Cash")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundColor(Color(hex: "#9CA3AF"))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.white.opacity(0.06))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                    }
-                    Button(action: { targetPct = 100 }) {
-                        Text("All In")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundColor(.orange)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.orange.opacity(0.12))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                    }
+                Button(action: { targetPct = 100 }) {
+                    Text("All In")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(.orange)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.orange.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
             }
         }
@@ -1156,15 +1128,15 @@ struct InvestSheet: View {
                 }
                 .frame(height: 5)
 
-                // Amend button — lets the user reduce the target to what's already allocated
+                // Accept current amount — lets the user reduce the target to what's already allocated
                 if allocatedTotal > 0 && allocatedTotal < targetDollars - 1 {
                     Button(action: {
                         amendedTargetDollars = allocatedTotal
                     }) {
                         HStack(spacing: 5) {
-                            Image(systemName: "pencil.circle")
+                            Image(systemName: "checkmark.circle")
                                 .font(.system(size: 12))
-                            Text(String(format: "Amend to $%.0f", allocatedTotal))
+                            Text(String(format: "Accept $%.0f", allocatedTotal))
                                 .font(.system(size: 12, weight: .medium))
                         }
                         .foregroundColor(.orange.opacity(0.85))
