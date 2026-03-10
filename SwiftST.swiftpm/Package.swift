@@ -20,7 +20,6 @@ let package = Package(
             teamIdentifier: "J8D7WJR5PY",
             displayVersion: "1.0",
             bundleVersion: "1",
-            additionalInfoPlistContentFilePath: "ExportCompliance.plist",
             appIcon: .placeholder(icon: .barChart),
             accentColor: .presetColor(.orange),
             supportedDeviceFamilies: [
@@ -32,7 +31,8 @@ let package = Package(
                 .landscapeRight,
                 .landscapeLeft,
                 .portraitUpsideDown(.when(deviceFamilies: [.pad]))
-            ]
+            ],
+            additionalInfoPlistContentFilePath: "ExportCompliance.plist"
         )
     ],
     targets: [
