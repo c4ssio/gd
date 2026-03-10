@@ -134,6 +134,33 @@ final class Portfolio: ObservableObject {
                                              avgBuyPrice: targetPrice, buyBarIndex: barIndex)
         }
     }
+
+    /// Sell `sourceDollars` from one holding and distribute across multiple target buckets.
+    func reallocate(sourceTicker: String, sourceDollars: Double,
+                    targets: [String: Double], prices: [String: Double],
+                    barIndex: Int) {
+        guard sourceDollars > 0 else { return }
+        let srcPrice = prices[sourceTicker] ?? 1.0
+        guard srcPrice > 0 else { return }
+        holdings[sourceTicker]?.shares -= sourceDollars / srcPrice
+        if let h = holdings[sourceTicker], h.shares < 0.001 {
+            holdings.removeValue(forKey: sourceTicker)
+        }
+        for (targetTicker, targetDollars) in targets where targetDollars > 0.01 {
+            let tPrice = prices[targetTicker] ?? 1.0
+            guard tPrice > 0 else { continue }
+            let newShares = targetDollars / tPrice
+            if var existing = holdings[targetTicker] {
+                let oldCost = existing.shares * existing.avgBuyPrice
+                existing.avgBuyPrice = (oldCost + newShares * tPrice) / (existing.shares + newShares)
+                existing.shares += newShares
+                holdings[targetTicker] = existing
+            } else {
+                holdings[targetTicker] = Holding(ticker: targetTicker, shares: newShares,
+                                                 avgBuyPrice: tPrice, buyBarIndex: barIndex)
+            }
+        }
+    }
 }
 
 // ============================================================
@@ -1267,12 +1294,388 @@ struct SourceRow: View {
     }
 }
 
+// ── Destination Row (used in ReallocateSheet) ─────────────────
+
+struct DestinationRow: View {
+    let ticker:      String
+    let name:        String
+    let code:        String
+    let color:       Color
+    let curHolding:  Double   // existing position value
+    let moveDollars: Double   // total $ being redistributed (for % calc)
+    let allocated:   Double   // earmarked for this bucket
+    let onAdd:       (Double) -> Void
+
+    private let red = Color(red: 0.95, green: 0.28, blue: 0.32)
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(color.opacity(0.15))
+                        .frame(width: 36, height: 36)
+                    Text(code)
+                        .font(.system(size: ticker == "CASH" ? 16 : 10,
+                                      weight: .black, design: .monospaced))
+                        .foregroundColor(color)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ticker == "CASH" ? "Cash" : name)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                    if curHolding > 0.5 {
+                        Text(String(format: "Holding: $%.0f", curHolding))
+                            .font(.system(size: 11))
+                            .foregroundColor(.gray)
+                    }
+                }
+                Spacer()
+                Text(allocated > 0.5 ? String(format: "$%.0f", allocated) : "—")
+                    .font(.system(size: 15, weight: .bold, design: .monospaced))
+                    .foregroundColor(allocated > 0.5 ? .orange : Color.gray.opacity(0.4))
+            }
+
+            // +/- buttons as % of moveDollars
+            HStack(spacing: 6) {
+                ForEach([10.0, 25.0, 50.0], id: \.self) { pct in
+                    Button(action: { onAdd(moveDollars * pct / 100) }) {
+                        Text("+\(Int(pct))%")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(Color.white.opacity(0.07))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    Button(action: { onAdd(-(moveDollars * pct / 100)) }) {
+                        Text("-\(Int(pct))%")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundColor(allocated > 0.5 ? red : red.opacity(0.3))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(Color.red.opacity(allocated > 0.5 ? 0.07 : 0.03))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                // "Rest" — fills this bucket with all unallocated dollars
+                Button(action: { onAdd(moveDollars) }) {
+                    Text("Rest")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.orange)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(Color.orange.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                Button(action: { onAdd(-allocated) }) {
+                    Text("Clear")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(allocated > 0.5 ? red : Color.gray.opacity(0.35))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(Color.red.opacity(allocated > 0.5 ? 0.10 : 0.03))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+// ── Reallocate Sheet ──────────────────────────────────────────
+
+struct ReallocateSheet: View {
+    let sourceTicker: String
+    @ObservedObject var engine:    GameEngine
+    @ObservedObject var portfolio: Portfolio
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var snapPrices:     [String: Double] = [:]
+    @State private var snapSourceVal:  Double = 0
+    @State private var movePct:        Double = 100
+    @State private var targetAlloc:    [String: Double] = [:]
+    @State private var amendedDollars: Double? = nil
+
+    private var sourceColor: Color {
+        sourceTicker == "CASH"
+            ? Color(hex: "#6B7280")
+            : Color(hex: engine.series(for: sourceTicker)?.color ?? "#888")
+    }
+    private var sourceName: String {
+        sourceTicker == "CASH" ? "Cash" : (engine.series(for: sourceTicker)?.name ?? sourceTicker)
+    }
+    private var sourceCode: String {
+        sourceTicker == "CASH" ? "$" : (engine.series(for: sourceTicker)?.code ?? sourceTicker)
+    }
+
+    private var moveDollars: Double {
+        amendedDollars ?? snapSourceVal * movePct / 100
+    }
+    private var allocatedTotal: Double { targetAlloc.values.reduce(0, +) }
+    private var remaining:      Double { max(0, moveDollars - allocatedTotal) }
+    private var canConfirm:     Bool   {
+        moveDollars > 0 && abs(allocatedTotal - moveDollars) < 1.0
+    }
+
+    private var groupedDests: [(group: String, assets: [AssetSeries])] {
+        var seen = [String]()
+        var map  = [String: [AssetSeries]]()
+        for a in engine.data.assets where a.ticker != sourceTicker {
+            if map[a.group] == nil { seen.append(a.group); map[a.group] = [] }
+            map[a.group]!.append(a)
+        }
+        return seen.map { (group: $0, assets: map[$0]!) }
+    }
+
+    private let green = Color(red: 0.2, green: 0.9, blue: 0.48)
+    private let red   = Color(red: 0.95, green: 0.28, blue: 0.32)
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color(hex: "#080D18").ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 20) {
+                        sourceCard
+                        moveCard
+                        progressCard
+
+                        // Cash destination (available when source is not CASH)
+                        if sourceTicker != "CASH" {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("SAFE HAVEN")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.gray)
+                                    .tracking(1)
+                                    .padding(.horizontal, 2)
+                                makeDestRow(ticker: "CASH", name: "Cash",
+                                            code: "$", color: Color(hex: "#6B7280"))
+                            }
+                        }
+
+                        // All asset groups
+                        ForEach(groupedDests, id: \.group) { sec in
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text(sec.group.uppercased())
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.gray)
+                                    .tracking(1)
+                                    .padding(.horizontal, 2)
+                                ForEach(sec.assets, id: \.ticker) { asset in
+                                    makeDestRow(ticker: asset.ticker,
+                                                name:   asset.name,
+                                                code:   asset.code,
+                                                color:  Color(hex: asset.color))
+                                }
+                            }
+                        }
+                    }
+                    .padding(20)
+                }
+            }
+            .navigationTitle("Redistribute")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }
+                        .foregroundColor(.gray)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Confirm") {
+                        portfolio.reallocate(
+                            sourceTicker:  sourceTicker,
+                            sourceDollars: moveDollars,
+                            targets:       targetAlloc,
+                            prices:        snapPrices,
+                            barIndex:      engine.barIndex
+                        )
+                        dismiss()
+                    }
+                    .disabled(!canConfirm)
+                    .foregroundColor(canConfirm ? .orange : .gray)
+                    .fontWeight(.semibold)
+                }
+            }
+            .onAppear {
+                let p = engine.prices
+                snapPrices    = p
+                snapSourceVal = portfolio.currentValue(ticker: sourceTicker, prices: p)
+            }
+        }
+    }
+
+    // ── Source header card ────────────────────────────────────
+    private var sourceCard: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(sourceColor.opacity(0.18))
+                    .frame(width: 50, height: 50)
+                Text(sourceCode)
+                    .font(.system(size: sourceTicker == "CASH" ? 20 : 13,
+                                  weight: .black, design: .monospaced))
+                    .foregroundColor(sourceColor)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(sourceName)
+                    .font(.title3.bold())
+                    .foregroundColor(.white)
+                let ret = portfolio.returnSinceBuy(ticker: sourceTicker, prices: snapPrices)
+                if sourceTicker != "CASH" {
+                    Text(String(format: "%+.1f%% return since buy", ret * 100))
+                        .font(.caption)
+                        .foregroundColor(ret >= 0 ? green : red)
+                } else {
+                    Text("Safe haven · always $1")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(String(format: "$%.0f", snapSourceVal))
+                    .font(.system(size: 17, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white)
+                Text("position")
+                    .font(.system(size: 10))
+                    .foregroundColor(.gray)
+            }
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14)
+            .strokeBorder(sourceColor.opacity(0.2), lineWidth: 1))
+    }
+
+    // ── How much to move card ─────────────────────────────────
+    private var moveCard: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("Redistributing")
+                    .font(.caption).foregroundColor(.gray)
+                Spacer()
+                Text(String(format: "$%.0f  (%.0f%% of position)", moveDollars, movePct))
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white)
+            }
+            HStack(spacing: 8) {
+                ForEach([25.0, 50.0, 75.0, 100.0], id: \.self) { p in
+                    let isActive = movePct == p && amendedDollars == nil
+                    Button(action: {
+                        amendedDollars = nil
+                        movePct = p
+                        clampAllocs(to: snapSourceVal * p / 100)
+                    }) {
+                        Text(p == 100 ? "All" : "\(Int(p))%")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(isActive ? .black : (p == 100 ? .orange : .white))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            .background(isActive
+                                ? (p == 100 ? Color.orange : Color.white.opacity(0.85))
+                                : (p == 100 ? Color.orange.opacity(0.12) : Color.white.opacity(0.08)))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    // ── Allocation progress card ──────────────────────────────
+    private var progressCard: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text("Distributed")
+                    .font(.caption).foregroundColor(.gray)
+                Spacer()
+                Text(String(format: "$%.0f / $%.0f", allocatedTotal, moveDollars))
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundColor(canConfirm ? green : .white)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.07))
+                    Capsule()
+                        .fill(LinearGradient(colors: [.orange, .yellow],
+                                             startPoint: .leading, endPoint: .trailing))
+                        .frame(width: geo.size.width * min(1, allocatedTotal / max(1, moveDollars)))
+                        .animation(.spring(duration: 0.25), value: allocatedTotal)
+                }
+            }
+            .frame(height: 5)
+            if allocatedTotal > 0 && allocatedTotal < moveDollars - 1 {
+                Button(action: { amendedDollars = allocatedTotal }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "checkmark.circle").font(.system(size: 12))
+                        Text(String(format: "Move only $%.0f", allocatedTotal))
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundColor(.orange.opacity(0.85))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .background(Color.orange.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .animation(.easeInOut(duration: 0.2), value: allocatedTotal)
+            }
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    // ── Build a single DestinationRow ─────────────────────────
+    @ViewBuilder
+    private func makeDestRow(ticker: String, name: String,
+                             code: String, color: Color) -> some View {
+        let alloc  = targetAlloc[ticker] ?? 0
+        let curVal = portfolio.currentValue(ticker: ticker, prices: snapPrices)
+        DestinationRow(
+            ticker:      ticker,
+            name:        name,
+            code:        code,
+            color:       color,
+            curHolding:  curVal,
+            moveDollars: moveDollars,
+            allocated:   alloc,
+            onAdd: { delta in
+                let cur    = targetAlloc[ticker] ?? 0
+                let budget = remaining + cur
+                let next   = min(budget, max(0, cur + delta))
+                if next < 0.01 { targetAlloc.removeValue(forKey: ticker) }
+                else            { targetAlloc[ticker] = next }
+            }
+        )
+    }
+
+    private func clampAllocs(to newMax: Double) {
+        var used = 0.0
+        var result: [String: Double] = [:]
+        for (t, v) in targetAlloc {
+            let take = min(v, max(0, newMax - used))
+            if take > 0.01 { result[t] = take; used += take }
+        }
+        targetAlloc = result
+    }
+}
+
 // ── Portfolio Page ────────────────────────────────────────────
 
 struct PortfolioView: View {
     @ObservedObject var engine:    GameEngine
     @ObservedObject var portfolio: Portfolio
 
+    @State private var reallocateTicker: String? = nil
 
     private var prices: [String: Double] { engine.prices }
     private var total:  Double           { portfolio.totalValue(prices: prices) }
@@ -1411,18 +1814,22 @@ struct PortfolioView: View {
                     ScrollView {
                         VStack(spacing: 0) {
                             ForEach(rows, id: \.ticker) { row in
-                                HoldingRow(
-                                    ticker:     row.ticker,
-                                    value:      row.value,
-                                    fraction:   row.fraction,
-                                    returnPct:  row.ret,
-                                    color:      row.color,
-                                    name:       row.name,
-                                    divPaid:    portfolio.dividendsPaid(
-                                                    ticker:     row.ticker,
-                                                    prices:     prices,
-                                                    totalBars:  engine.totalBars)
-                                )
+                                Button(action: { reallocateTicker = row.ticker }) {
+                                    HoldingRow(
+                                        ticker:     row.ticker,
+                                        value:      row.value,
+                                        fraction:   row.fraction,
+                                        returnPct:  row.ret,
+                                        color:      row.color,
+                                        name:       row.name,
+                                        divPaid:    portfolio.dividendsPaid(
+                                                        ticker:     row.ticker,
+                                                        prices:     prices,
+                                                        totalBars:  engine.totalBars)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .contentShape(Rectangle())
                                 .padding(.horizontal, 16)
                                 Divider().opacity(0.1).padding(.horizontal, 16)
                             }
@@ -1431,6 +1838,14 @@ struct PortfolioView: View {
                     }
 
                 }
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { reallocateTicker != nil },
+            set: { if !$0 { reallocateTicker = nil } }
+        )) {
+            if let t = reallocateTicker {
+                ReallocateSheet(sourceTicker: t, engine: engine, portfolio: portfolio)
             }
         }
     }
