@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="toolbar">
+  <h2>Review Queue</h2>
+  <div class="filters">
+    <a href="/" class="{% if not verdict %}active{% endif %}">All</a>
+    <a href="/?verdict=rewarded_ads" class="{% if verdict=='rewarded_ads' %}active{% endif %}">Rewarded Ads</a>
+    <a href="/?verdict=quality_f2p"  class="{% if verdict=='quality_f2p'  %}active{% endif %}">Quality F2P</a>
+    <a href="/?verdict=unknown"      class="{% if verdict=='unknown'      %}active{% endif %}">Unknown</a>
+    <a href="/?verdict=skip"         class="{% if verdict=='skip'         %}active{% endif %}">Skip</a>
+  </div>
+</div>
+
+{% if not games %}
+  <p class="empty">Queue is empty for this filter.</p>
+{% endif %}
+
+{% for g in games %}
+<div class="game-card verdict-{{ g['verdict'] }}">
+  <img src="{{ g['icon_url'] }}" alt="" class="icon">
+  <div class="info">
+    <div class="title-row">
+      <a href="{{ g['store_url'] }}" target="_blank" class="game-title">{{ g['name'] }}</a>
+      <span class="genre-tag">{{ g['genre'] }}</span>
+      <span class="verdict-badge {{ g['verdict'] }}">{{ g['verdict'].replace('_', ' ') }}</span>
+    </div>
+    <div class="meta">
+      <span>{{ g['developer'] }}</span>
+      <span class="rating">★ {{ "%.1f"|format(g['rating']) }} ({{ g['rating_count']|int }})</span>
+      <span class="score">ad {{ "%.0f"|format(g['ad_score'] * 100) }}%</span>
+      <span class="score">quality {{ "%.0f"|format(g['quality_score'] * 100) }}%</span>
+    </div>
+    {% if g['signals'] %}
+    <div class="signals">
+      {% for sig in g['signals']|from_json %}
+        <span class="signal-tag">{{ sig[:60] }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <p class="desc">{{ g['description'][:300] }}{% if g['description']|length > 300 %}…{% endif %}</p>
+
+    <form method="POST" action="/decide/{{ g['track_id'] }}" class="actions">
+      <input type="text" name="note" placeholder="Note (optional)" class="note-input">
+      <button name="action" value="approved" class="btn approve">Approve</button>
+      <button name="action" value="rejected" class="btn reject">Reject</button>
+      <button name="action" value="flagged"  class="btn flag">Flag</button>
+    </form>
+  </div>
+</div>
+{% endfor %}
+
+{% if games|length == per_page %}
+<div class="pagination">
+  <a href="/?page={{ page + 1 }}{% if verdict %}&verdict={{ verdict }}{% endif %}" class="btn">Next page →</a>
+</div>
+{% endif %}
+
+{% endblock %}

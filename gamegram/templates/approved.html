@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="toolbar">
+  <h2>Approved Catalog ({{ games|length }})</h2>
+  <a href="/api/catalog.json" target="_blank" class="btn">Export JSON API</a>
+</div>
+
+{% if not games %}
+  <p class="empty">No approved games yet. Go review the queue!</p>
+{% endif %}
+
+{% for g in games %}
+<div class="game-card approved-card">
+  <img src="{{ g['icon_url'] }}" alt="" class="icon">
+  <div class="info">
+    <div class="title-row">
+      <a href="{{ g['store_url'] }}" target="_blank" class="game-title">{{ g['name'] }}</a>
+      <span class="genre-tag">{{ g['genre'] }}</span>
+    </div>
+    <div class="meta">
+      <span>{{ g['developer'] }}</span>
+      <span class="rating">★ {{ "%.1f"|format(g['rating']) }} ({{ g['rating_count']|int }})</span>
+      <span class="score">ad {{ "%.0f"|format(g['ad_score'] * 100) }}%</span>
+      <span class="score">quality {{ "%.0f"|format(g['quality_score'] * 100) }}%</span>
+    </div>
+    {% if g['curator_note'] %}
+      <p class="curator-note">Note: {{ g['curator_note'] }}</p>
+    {% endif %}
+    <form method="POST" action="/decide/{{ g['track_id'] }}" class="actions inline">
+      <button name="action" value="rejected" class="btn reject small">Remove</button>
+    </form>
+  </div>
+</div>
+{% endfor %}
+
+{% endblock %}

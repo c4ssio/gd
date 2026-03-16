@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gamegram Curator</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <nav>
+    <a href="/" class="brand">🎮 Gamegram</a>
+    <a href="/">Queue</a>
+    <a href="/approved">Approved</a>
+    <a href="/api/catalog.json" target="_blank">API</a>
+  </nav>
+
+  <div class="stats-bar">
+    <span class="stat">Total <b>{{ stats.total }}</b></span>
+    <span class="stat pending">Pending <b>{{ stats.pending }}</b></span>
+    <span class="stat approved">Approved <b>{{ stats.approved }}</b></span>
+    <span class="stat rejected">Rejected <b>{{ stats.rejected }}</b></span>
+    <span class="stat flagged">Flagged <b>{{ stats.flagged }}</b></span>
+    <span class="stat">Rewarded ads <b>{{ stats.rewarded_ads }}</b></span>
+    <span class="stat">Quality F2P <b>{{ stats.quality_f2p }}</b></span>
+  </div>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
