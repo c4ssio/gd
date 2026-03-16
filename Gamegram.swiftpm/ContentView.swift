@@ -5,9 +5,7 @@ import CryptoKit
 // MARK: - Configuration
 // ============================================================
 
-/// Change this to your server URL before running on device.
-/// For local testing: "http://localhost:5050"
-let kAPIBase = "https://api.gamegram.app"
+let kAPIBase = "http://3.82.187.238:5050"
 
 // ============================================================
 // MARK: - Models

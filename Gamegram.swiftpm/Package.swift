@@ -22,6 +22,11 @@ let package = Package(
             bundleVersion: "1",
             appIcon: .placeholder(icon: .gameController),
             accentColor: .presetColor(.purple),
+            infoPlist: .extendingDefault(with: [
+                "NSAppTransportSecurity": .dictionary([
+                    "NSAllowsArbitraryLoads": .boolean(true)
+                ])
+            ]),
             supportedDeviceFamilies: [
                 .pad,
                 .phone
