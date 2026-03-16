@@ -6,6 +6,7 @@ Routes:
   GET  /approved          → approved catalog
   POST /decide/<track_id> → approve | reject | flag a game
   GET  /api/catalog.json  → public JSON feed for the iOS switchboard app
+  POST /api/vote          → cast or change a vote {token_hash, track_id, vote}
 """
 
 import json
@@ -79,23 +80,58 @@ def decide(track_id: int):
 def catalog_json():
     con = _con()
     rows = db.get_approved(con)
+    vote_scores = db.get_vote_scores(con)
     games = []
     for r in rows:
         games.append({
-            "track_id":     r["track_id"],
-            "name":         r["name"],
-            "developer":    r["developer"],
-            "genre":        r["genre"],
-            "rating":       r["rating"],
-            "rating_count": r["rating_count"],
-            "icon_url":     r["icon_url"],
-            "store_url":    r["store_url"],
-            "ad_score":     r["ad_score"],
+            "track_id":      r["track_id"],
+            "name":          r["name"],
+            "developer":     r["developer"],
+            "genre":         r["genre"],
+            "rating":        r["rating"],
+            "rating_count":  r["rating_count"],
+            "icon_url":      r["icon_url"],
+            "store_url":     r["store_url"],
+            "ad_score":      r["ad_score"],
             "quality_score": r["quality_score"],
-            "signals":      json.loads(r["signals"] or "[]"),
-            "curator_note": r["curator_note"] or "",
+            "signals":       json.loads(r["signals"] or "[]"),
+            "curator_note":  r["curator_note"] or "",
+            "vote_score":    vote_scores.get(r["track_id"], 0),
         })
+    # Sort approved games by community vote score, then quality
+    games.sort(key=lambda g: (g["vote_score"], g["quality_score"]), reverse=True)
     return jsonify({"games": games, "count": len(games)})
+
+
+@app.post("/api/vote")
+def api_vote():
+    data = request.get_json(silent=True) or {}
+    token_hash = data.get("token_hash", "").strip()
+    track_id   = data.get("track_id")
+    vote       = data.get("vote")
+
+    if not token_hash or len(token_hash) != 64:
+        return jsonify({"error": "invalid token_hash"}), 400
+    if not isinstance(track_id, int):
+        return jsonify({"error": "invalid track_id"}), 400
+    if vote not in (1, -1):
+        return jsonify({"error": "vote must be 1 or -1"}), 400
+
+    con = _con()
+    # Only allow votes on approved games
+    game = con.execute(
+        "SELECT track_id FROM games WHERE track_id = ? AND curator_status = 'approved'",
+        (track_id,)
+    ).fetchone()
+    if not game:
+        return jsonify({"error": "game not found"}), 404
+
+    result = db.record_vote(con, token_hash, track_id, vote)
+    new_score = con.execute(
+        "SELECT COALESCE(SUM(vote), 0) as score FROM votes WHERE track_id = ?",
+        (track_id,)
+    ).fetchone()["score"]
+    return jsonify({"status": result, "vote_score": new_score})
 
 
 if __name__ == "__main__":

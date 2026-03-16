@@ -51,6 +51,17 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_verdict ON games(verdict);
         CREATE INDEX IF NOT EXISTS idx_curator_status ON games(curator_status);
         CREATE INDEX IF NOT EXISTS idx_rating ON games(rating DESC);
+
+        CREATE TABLE IF NOT EXISTS votes (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_hash  TEXT NOT NULL,
+            track_id    INTEGER NOT NULL,
+            vote        INTEGER NOT NULL CHECK(vote IN (1, -1)),
+            voted_at    TEXT DEFAULT (datetime('now')),
+            UNIQUE(token_hash, track_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_votes_track ON votes(track_id);
     """)
     con.commit()
 
@@ -125,6 +136,45 @@ def get_queue(
         ORDER BY ad_score DESC, quality_score DESC, rating_count DESC
         LIMIT ? OFFSET ?
     """, params).fetchall()
+
+
+def record_vote(con: sqlite3.Connection, token_hash: str, track_id: int, vote: int) -> str:
+    """
+    Insert or replace a vote. Returns 'ok', 'changed', or 'unchanged'.
+    Only counts votes for approved games.
+    """
+    assert vote in (1, -1)
+    existing = con.execute(
+        "SELECT vote FROM votes WHERE token_hash = ? AND track_id = ?",
+        (token_hash, track_id)
+    ).fetchone()
+    if existing:
+        if existing["vote"] == vote:
+            return "unchanged"
+        con.execute(
+            "UPDATE votes SET vote = ?, voted_at = datetime('now') WHERE token_hash = ? AND track_id = ?",
+            (vote, token_hash, track_id)
+        )
+        con.commit()
+        return "changed"
+    con.execute(
+        "INSERT INTO votes (token_hash, track_id, vote) VALUES (?, ?, ?)",
+        (token_hash, track_id, vote)
+    )
+    con.commit()
+    return "ok"
+
+
+def get_vote_scores(con: sqlite3.Connection) -> dict[int, int]:
+    """Return {track_id: net_vote_score} for all approved games."""
+    rows = con.execute("""
+        SELECT v.track_id, SUM(v.vote) as score
+        FROM votes v
+        JOIN games g ON g.track_id = v.track_id
+        WHERE g.curator_status = 'approved'
+        GROUP BY v.track_id
+    """).fetchall()
+    return {r["track_id"]: r["score"] for r in rows}
 
 
 def get_approved(con: sqlite3.Connection) -> list[sqlite3.Row]:
