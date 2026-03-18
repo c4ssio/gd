@@ -78,7 +78,7 @@ def search_free_games(
 
 
 def fetch_top_free_games(
-    genre_ids: list[int] | None = None,
+    genre_ids=None,  # list[int] or None
     country: str = "us",
     per_genre: int = 200,
     delay: float = 0.5,

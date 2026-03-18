@@ -134,5 +134,21 @@ def api_vote():
     return jsonify({"status": result, "vote_score": new_score})
 
 
+@app.get("/api/stats")
+def api_stats():
+    con = _con()
+    s = db.stats(con)
+    return jsonify(s)
+
+
+@app.get("/admin/scrape-log")
+def scrape_log():
+    try:
+        log = Path("/var/log/gamegram_scrape.log").read_text()
+    except FileNotFoundError:
+        log = "(no log yet)"
+    return app.response_class(log, mimetype="text/plain")
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5050, debug=False)
