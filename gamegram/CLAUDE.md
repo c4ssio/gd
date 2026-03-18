@@ -40,11 +40,32 @@
 
 ## Deploying a new server
 
+The repo is public at `https://github.com/c4ssio/gd` — user data should just
+`git clone` it rather than embedding files. This keeps user data tiny and always
+deploys the latest committed code.
+
 Credentials are provided at session start. Never commit them.
 
 ```bash
-# Build user data (gzip-compressed, must stay under 16 384 bytes)
-python3 gamegram/build_userdata.py > /tmp/userdata.sh.gz
+# Write the user data script
+cat > /tmp/userdata.sh << 'EOF'
+#!/bin/bash
+exec >> /var/log/gamegram_setup.log 2>&1
+echo "=== setup $(date) ==="
+dnf install -y python3 python3-pip nginx cronie git -q
+pip3 install flask requests -q
+
+git clone https://github.com/c4ssio/gd /tmp/gd_repo
+mkdir -p /opt/gamegram/data
+cp -r /tmp/gd_repo/gamegram/scraper   /opt/gamegram/
+cp -r /tmp/gd_repo/gamegram/curator   /opt/gamegram/
+cp -r /tmp/gd_repo/gamegram/templates /opt/gamegram/
+cp -r /tmp/gd_repo/gamegram/static    /opt/gamegram/
+cp    /tmp/gd_repo/gamegram/scrape.py /opt/gamegram/
+
+# Write systemd unit, nginx config, scraper wrapper ...
+# (see full script in gamegram/deploy/userdata.sh)
+EOF
 
 # Launch
 INSTANCE=$(aws ec2 run-instances \
@@ -52,7 +73,7 @@ INSTANCE=$(aws ec2 run-instances \
   --key-name remote_cursor_key \
   --subnet-id <public-subnet> --security-group-ids sg-0217569ff70039297 \
   --associate-public-ip-address \
-  --user-data fileb:///tmp/userdata.sh.gz \
+  --user-data file:///tmp/userdata.sh \
   --query 'Instances[0].InstanceId' --output text)
 
 # Re-attach Elastic IP
